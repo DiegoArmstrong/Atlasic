@@ -1,0 +1,92 @@
+{
+  "name": "atlasic",
+  "displayName": "Atlasic",
+  "description": "AI-powered codebase visualization and dependency graph tool",
+  "version": "1.0.0",
+  "publisher": "atlasic",
+  "engines": {
+    "vscode": "^1.108.1"
+  },
+  "categories": [
+    "Debuggers",
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "atlasic.generateCodebaseMap",
+        "title": "Atlasic: Generate Dependency Map"
+      },
+      {
+        "command": "atlasic.openVisualizer",
+        "title": "Atlasic: Open Dependency Visualizer"
+      },
+      {
+        "command": "atlasic.refreshGraph",
+        "title": "Atlasic: Refresh Graph"
+      },
+      {
+        "command": "atlasic.clearCache",
+        "title": "Atlasic: Clear Cache"
+      }
+    ],
+    "configuration": {
+      "title": "Atlasic",
+      "properties": {
+        "atlasic.ignorePatterns": {
+          "type": "array",
+          "default": [
+            "node_modules",
+            "dist",
+            "build",
+            ".git",
+            "__pycache__",
+            ".venv",
+            ".next",
+            "out",
+            "coverage"
+          ],
+          "description": "Patterns to ignore during file discovery"
+        },
+        "atlasic.maxDepth": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum directory traversal depth"
+        },
+        "atlasic.supportedLanguages": {
+          "type": "array",
+          "default": [
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".py",
+            ".java",
+            ".go"
+          ],
+          "description": "File extensions to analyze"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./ && node esbuild.js",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.108.1",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "esbuild": "^0.19.11",
+    "eslint": "^8.55.0",
+    "typescript": "^5.3.3"
+  }
+}
