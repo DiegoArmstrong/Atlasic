@@ -13,7 +13,11 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:atlasic.generateCodebaseMap",
+    "onCommand:atlasic.openVisualizer",
+    "onCommand:atlasic.refreshGraph",
+    "onCommand:atlasic.clearCache"
   ],
   "main": "./dist/extension.js",
   "contributes": {
