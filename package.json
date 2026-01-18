@@ -2,8 +2,9 @@
   "name": "atlasic",
   "displayName": "Atlasic",
   "description": "AI-powered codebase visualization and dependency graph tool",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "license": "MIT",
+  "icon": "images/icon.png",
   "publisher": "atlasic",
   "authors": [
     {
