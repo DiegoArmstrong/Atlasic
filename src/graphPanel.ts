@@ -282,7 +282,7 @@ export class GraphPanel {
   </div>
 
   <div class="controls">
-    <div class="control-title">📊 Graph Stats</div>
+    <div class="control-title"> Graph Stats</div>
     <div class="stat-line">Nodes: <strong id="nodeCount">0</strong></div>
     <div class="stat-line">Links: <strong id="linkCount">0</strong></div>
 
@@ -296,18 +296,20 @@ export class GraphPanel {
 
       <label style="display:flex; gap:8px; align-items:center; user-select:none; margin-bottom:4px;">
         <input type="radio" name="colorMode" id="modeHeat" value="heat" />
-        Heatmap (In-degree)
+        Dependency Heatmap
       </label>
 
       <label style="display:flex; gap:8px; align-items:center; user-select:none;">
         <input type="radio" name="colorMode" id="modeCombined" value="combined" />
-        Heatmap (Combined)
+        Refactoring Risk Heatmap
       </label>
 
       <div class="status" id="gitStatus">
-        Git heat: <strong id="gitStatusValue">loading…</strong><br/>
-        Max git score: <strong id="gitMax">0</strong>
+      Git heat: <strong id="gitStatusValue">loading…</strong><br/>
+      Max git score: <strong id="gitMax">0</strong>
       </div>
+
+
     </div>
 
     <div class="stat-line" id="heatLegend" style="display:none; margin-top:10px;">
