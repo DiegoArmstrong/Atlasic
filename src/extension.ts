@@ -1,13 +1,24 @@
 import * as vscode from 'vscode';
+import * as dotenv from 'dotenv';
+import * as path from 'path';
 import { GraphGenerator } from './graphGenerator';
 import { GraphPanel } from './graphPanel';
 import { CacheManager } from './cacheManager';
 import { Logger } from './utils/logger';
+import { OpenRouterClient } from './services/openRouterClient';
+import { DebugContextCollector } from './services/debugContextCollector';
+import { DebugChatPanel } from './features/debugChat';
+import { GitAnalyzer } from './features/gitAnalyzer';
 
 export async function activate(context: vscode.ExtensionContext) {
+  // Load environment variables from .env file
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspaceRoot) {
+    dotenv.config({ path: path.join(workspaceRoot, '.env') });
+  }
+
   Logger.info('Atlasic extension is now active!');
 
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceRoot) {
     vscode.window.showWarningMessage('Atlasic: No workspace folder found');
     return;
@@ -16,6 +27,40 @@ export async function activate(context: vscode.ExtensionContext) {
   // Initialize components
   const graphGenerator = new GraphGenerator(workspaceRoot);
   const cacheManager = new CacheManager(workspaceRoot);
+
+  // Initialize AI services
+  let apiClient: OpenRouterClient | undefined;
+  let debugCollector: DebugContextCollector | undefined;
+  let gitAnalyzer: GitAnalyzer | undefined;
+
+  const config = vscode.workspace.getConfiguration('atlasic');
+  const aiEnabled = config.get<boolean>('enableAIFeatures', true);
+
+  if (aiEnabled) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    console.log(apiKey)
+    
+    if (!apiKey) {
+      vscode.window.showWarningMessage(
+        'Atlasic: OPENROUTER_API_KEY not found in .env file. AI features will be disabled.',
+        'Open Settings'
+      ).then(action => {
+        if (action === 'Open Settings') {
+          vscode.commands.executeCommand('workbench.action.openSettings', 'atlasic');
+        }
+      });
+    } else {
+      try {
+        apiClient = new OpenRouterClient(apiKey);
+        debugCollector = new DebugContextCollector();
+        gitAnalyzer = new GitAnalyzer(workspaceRoot, apiClient);
+        Logger.info('AI features initialized successfully');
+      } catch (error) {
+        Logger.error('Failed to initialize AI features', error as Error);
+        vscode.window.showErrorMessage('Atlasic: Failed to initialize AI features');
+      }
+    }
+  }
 
   // Create status bar
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
@@ -104,6 +149,33 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     )
   );
+
+  // Register AI-powered commands
+  if (apiClient && debugCollector) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand('atlasic.openDebugChat',
+        () => {
+          DebugChatPanel.createOrShow(context.extensionUri, apiClient!, debugCollector!);
+        }
+      )
+    );
+  }
+
+  if (gitAnalyzer) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand('atlasic.generateCommitMessage',
+        async () => {
+          await gitAnalyzer!.generateCommitMessage();
+        }
+      ),
+
+      vscode.commands.registerCommand('atlasic.analyzeChanges',
+        async () => {
+          await gitAnalyzer!.analyzeChanges();
+        }
+      )
+    );
+  }
 }
 
 export function deactivate() {
