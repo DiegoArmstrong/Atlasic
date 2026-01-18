@@ -24,4 +24,6 @@ We take your codebase's logic and give you back an interactive atlas of the rela
 
 # Usage
 
-Atlasic is a published VsCode extension! Simply go to your extensions panel, look up Atlasic, and have fun seeing your codebase like never before.
+Atlasic is a published [VsCode Extension](https://marketplace.visualstudio.com/items?itemName=atlasic.atlasic)!
+
+Have fun seeing your codebase like never before!
