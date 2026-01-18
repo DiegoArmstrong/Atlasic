@@ -279,12 +279,33 @@ export class GitAnalyzer {
   }
 
   private getAnalysisHtml(analysis: string, diff: GitDiff): string {
-    // Convert markdown-style formatting to HTML
-    const formattedAnalysis = analysis
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/`(.+?)`/g, '<code>$1</code>')
-      .replace(/\n/g, '<br>');
+    // Escape HTML first
+    let formattedAnalysis = analysis
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    
+    // Convert markdown to HTML with proper formatting
+    // Code blocks (triple backticks)
+    formattedAnalysis = formattedAnalysis.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    
+    // Headers
+    formattedAnalysis = formattedAnalysis.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+    formattedAnalysis = formattedAnalysis.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
+    formattedAnalysis = formattedAnalysis.replace(/^# (.*?)$/gm, '<h1>$1</h1>');
+    
+    // Bold and italic
+    formattedAnalysis = formattedAnalysis.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    formattedAnalysis = formattedAnalysis.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    
+    // Inline code
+    formattedAnalysis = formattedAnalysis.replace(/`([^`]+)`/g, '<code>$1</code>');
+    
+    // Blockquotes
+    formattedAnalysis = formattedAnalysis.replace(/^> (.*?)$/gm, '<blockquote>$1</blockquote>');
+    
+    // Line breaks
+    formattedAnalysis = formattedAnalysis.replace(/\n/g, '<br>');
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -305,6 +326,20 @@ export class GitAnalyzer {
       color: var(--vscode-textLink-foreground);
       border-bottom: 2px solid var(--vscode-panel-border);
       padding-bottom: 10px;
+      font-size: 1.8em;
+      margin: 20px 0 15px 0;
+    }
+
+    h2 {
+      color: var(--vscode-textLink-foreground);
+      font-size: 1.4em;
+      margin: 15px 0 10px 0;
+    }
+
+    h3 {
+      color: var(--vscode-textLink-foreground);
+      font-size: 1.2em;
+      margin: 12px 0 8px 0;
     }
     
     .summary {
@@ -312,6 +347,7 @@ export class GitAnalyzer {
       padding: 15px;
       border-radius: 5px;
       margin: 20px 0;
+      border-left: 4px solid var(--vscode-textLink-foreground);
     }
     
     .summary-item {
@@ -328,17 +364,46 @@ export class GitAnalyzer {
       padding: 20px;
       background: var(--vscode-textCodeBlock-background);
       border-radius: 5px;
+      border-left: 4px solid var(--vscode-textLink-foreground);
+    }
+
+    .analysis strong {
+      color: var(--vscode-textLink-foreground);
+      font-weight: 700;
+    }
+
+    .analysis em {
+      font-style: italic;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .analysis blockquote {
+      border-left: 3px solid var(--vscode-textLink-foreground);
+      padding-left: 12px;
+      margin: 10px 0;
+      color: var(--vscode-descriptionForeground);
+      font-style: italic;
     }
     
     code {
-      background: var(--vscode-textCodeBlock-background);
+      background: var(--vscode-editor-background);
       padding: 2px 6px;
       border-radius: 3px;
       font-family: var(--vscode-editor-font-family);
     }
-    
-    strong {
-      color: var(--vscode-textLink-foreground);
+
+    pre {
+      background: var(--vscode-editor-background);
+      padding: 12px;
+      border-radius: 4px;
+      overflow-x: auto;
+      margin: 10px 0;
+      border: 1px solid var(--vscode-panel-border);
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
     }
     
     .files-list {
@@ -346,11 +411,12 @@ export class GitAnalyzer {
     }
     
     .file-item {
-      padding: 5px 10px;
+      padding: 8px 12px;
       margin: 5px 0;
       background: var(--vscode-input-background);
       border-left: 3px solid var(--vscode-textLink-foreground);
       border-radius: 3px;
+      font-family: var(--vscode-editor-font-family);
     }
     
     .file-status {
@@ -363,12 +429,13 @@ export class GitAnalyzer {
     }
     
     .status-added { background: #4ec9b0; color: #000; }
-    .status-modified { background: #569cd6; color: #000; }
+    .status-modified { background: #569cd6; color: #fff; }
     .status-deleted { background: #f48771; color: #000; }
+    .status-renamed { background: #c586c0; color: #fff; }
   </style>
 </head>
 <body>
-  <h1>📊 Git Change Analysis</h1>
+  <h1>Git Change Analysis</h1>
   
   <div class="summary">
     <div class="summary-item">📁 Files: ${diff.summary.filesChanged}</div>
@@ -386,7 +453,7 @@ export class GitAnalyzer {
     `).join('')}
   </div>
   
-  <h2>AI Analysis</h2>
+  <h2>🤖 AI Analysis</h2>
   <div class="analysis">
     ${formattedAnalysis}
   </div>

@@ -79,7 +79,7 @@ export class DebugChatPanel {
       this._panel.webview.postMessage({
         command: 'addMessage',
         role: 'user',
-        content: userMessage
+        content: this._markdownToHtml(userMessage)
       });
 
       // Show loading state
@@ -111,9 +111,9 @@ export class DebugChatPanel {
         (token: string) => {
           assistantMessage += token;
           this._panel.webview.postMessage({
-            command: 'appendToken',
+            command: 'updateAssistantMessage',
             messageId: messageId,
-            token: token
+            content: this._markdownToHtml(assistantMessage)
           });
         },
         { temperature: 0.7, maxTokens: 4096 }
@@ -131,9 +131,39 @@ export class DebugChatPanel {
       Logger.error('Debug chat error', error as Error);
       this._panel.webview.postMessage({
         command: 'error',
-        message: `Error: ${(error as Error).message}`
+        message: this._markdownToHtml(`Error: ${(error as Error).message}`)
       });
     }
+  }
+
+  private _markdownToHtml(markdown: string): string {
+    let html = markdown;
+    
+    // Escape HTML special chars
+    html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    
+    // Code blocks (triple backticks)
+    html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    
+    // Headers
+    html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^# (.*?)$/gm, '<h1>$1</h1>');
+    
+    // Bold and italic
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    
+    // Blockquotes
+    html = html.replace(/^> (.*?)$/gm, '<blockquote>$1</blockquote>');
+    
+    // Line breaks
+    html = html.replace(/\n/g, '<br>');
+
+    return html;
   }
 
   private _buildSystemPrompt(debugContext: any): string {
@@ -327,6 +357,69 @@ Be concise but thorough. Focus on actionable insights.`;
       font-family: var(--vscode-editor-font-family);
       font-size: 0.9em;
     }
+
+    .message h1, .message h2, .message h3, .message h4 {
+      margin: 12px 0 8px 0;
+      color: var(--vscode-textLink-foreground);
+      font-weight: 600;
+    }
+
+    .message h1 { font-size: 1.5em; }
+    .message h2 { font-size: 1.3em; }
+    .message h3 { font-size: 1.1em; }
+    .message h4 { font-size: 1em; }
+
+    .message ul, .message ol {
+      margin: 8px 0;
+      padding-left: 24px;
+    }
+
+    .message li {
+      margin: 4px 0;
+      line-height: 1.6;
+    }
+
+    .message strong {
+      color: var(--vscode-textLink-foreground);
+      font-weight: 700;
+    }
+
+    .message em {
+      font-style: italic;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .message blockquote {
+      border-left: 3px solid var(--vscode-textLink-foreground);
+      padding-left: 12px;
+      margin: 8px 0;
+      color: var(--vscode-descriptionForeground);
+      font-style: italic;
+    }
+
+    .message hr {
+      border: none;
+      border-top: 1px solid var(--vscode-panel-border);
+      margin: 12px 0;
+    }
+
+    .message table {
+      border-collapse: collapse;
+      margin: 8px 0;
+      width: 100%;
+    }
+
+    .message table th,
+    .message table td {
+      border: 1px solid var(--vscode-panel-border);
+      padding: 8px 12px;
+      text-align: left;
+    }
+
+    .message table th {
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      font-weight: 600;
+    }
     
     .loading {
       display: flex;
@@ -423,8 +516,8 @@ Be concise but thorough. Focus on actionable insights.`;
     
     function addMessage(role, content) {
       const messageDiv = document.createElement('div');
-      messageDiv.className = \`message \${role}\`;
-      messageDiv.textContent = content;
+      messageDiv.className = 'message ' + role;
+      messageDiv.innerHTML = content;
       chatContainer.appendChild(messageDiv);
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
@@ -449,16 +542,16 @@ Be concise but thorough. Focus on actionable insights.`;
       hideLoading();
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message assistant';
-      messageDiv.id = \`msg-\${messageId}\`;
-      messageDiv.textContent = '';
+      messageDiv.id = 'msg-' + messageId;
+      messageDiv.innerHTML = '';
       chatContainer.appendChild(messageDiv);
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
     
-    function appendToken(messageId, token) {
-      const messageDiv = document.getElementById(\`msg-\${messageId}\`);
+    function updateAssistantMessage(messageId, content) {
+      const messageDiv = document.getElementById('msg-' + messageId);
       if (messageDiv) {
-        messageDiv.textContent += token;
+        messageDiv.innerHTML = content;
         chatContainer.scrollTop = chatContainer.scrollHeight;
       }
     }
@@ -504,8 +597,8 @@ Be concise but thorough. Focus on actionable insights.`;
         case 'startAssistantMessage':
           startAssistantMessage(message.messageId);
           break;
-        case 'appendToken':
-          appendToken(message.messageId, message.token);
+        case 'updateAssistantMessage':
+          updateAssistantMessage(message.messageId, message.content);
           break;
         case 'finishAssistantMessage':
           isProcessing = false;

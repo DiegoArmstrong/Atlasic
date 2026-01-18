@@ -31,7 +31,7 @@ export class OpenRouterClient {
   constructor(apiKey: string, model?: string) {
     this.apiKey = apiKey;
     const config = vscode.workspace.getConfiguration('atlasic');
-    this.model = model || config.get<string>('aiModel', 'google/gemini-2.0-flash-exp:free');
+    this.model = model || config.get<string>('aiModel', 'google/gemini-3-flash-preview');
   }
 
   async chatCompletion(

@@ -33,6 +33,18 @@
       {
         "command": "atlasic.clearCache",
         "title": "Atlasic: Clear Cache"
+      },
+      {
+        "command": "atlasic.openDebugChat",
+        "title": "Atlasic: Open Debug Assistant"
+      },
+      {
+        "command": "atlasic.generateCommitMessage",
+        "title": "Atlasic: Generate Commit Message"
+      },
+      {
+        "command": "atlasic.analyzeChanges",
+        "title": "Atlasic: Analyze Git Changes"
       }
     ],
     "configuration": {
@@ -70,6 +82,16 @@
             ".go"
           ],
           "description": "File extensions to analyze"
+        },
+        "atlasic.aiModel": {
+          "type": "string",
+          "default": "google/gemini-3-flash-preview",
+          "description": "AI model to use for debug chat and git analysis (OpenRouter format)"
+        },
+        "atlasic.enableAIFeatures": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered features (debug chat, git analysis)"
         }
       }
     }
@@ -88,5 +110,8 @@
     "esbuild": "^0.19.11",
     "eslint": "^8.55.0",
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3"
   }
 }
