@@ -15,7 +15,7 @@ exports.DEFAULT_IGNORE_PATTERNS = [
     '.idea',
     '.cache'
 ];
-exports.SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.go'];
+exports.SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.go', '.c', '.h', '.cpp', '.hpp', '.rs'];
 exports.DEFAULT_MAX_DEPTH = 10;
 exports.PATH_ALIAS_LOCATIONS = [
     'tsconfig.json',

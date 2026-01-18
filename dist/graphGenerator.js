@@ -233,6 +233,15 @@ class GraphGenerator {
                 return this.extractJavaDependencies(filePath, content);
             case '.go':
                 return this.extractGoDependencies(filePath, content);
+            case '.rs':
+                return this.extractRustDependencies(filePath, content);
+            case '.c':
+            case '.h':
+            case '.cc':
+            case '.hh':
+            case '.cpp':
+            case '.hpp':
+                return this.extractCppDependencies(filePath, content);
             default:
                 return [];
         }
@@ -346,6 +355,149 @@ class GraphGenerator {
             }
         }
         return links;
+    }
+    // =========================
+    // NEW: Rust dependencies
+    // =========================
+    extractRustDependencies(filePath, content) {
+        const links = [];
+        // Handles:
+        //   mod foo;
+        //   pub mod foo;
+        const modRegex = /^\s*(?:pub\s+)?mod\s+([a-zA-Z_]\w*)\s*;/gm;
+        // Handles (roughly):
+        //   use crate::foo::bar;
+        //   use super::foo;
+        //   use self::foo;
+        //   use crate::foo::{a,b};
+        // We'll extract only the leading module segment after crate/super/self.
+        const useRegex = /^\s*use\s+(crate|super|self)(?:::([^;]+))\s*;/gm;
+        // 1) mod foo;  -> try foo.rs or foo/mod.rs next to current file
+        for (const match of content.matchAll(modRegex)) {
+            const modName = match[1];
+            const resolved = this.resolveRustMod(filePath, modName);
+            if (resolved) {
+                links.push({ source: filePath, target: resolved, type: 'dependency' });
+            }
+        }
+        // 2) use crate::x::y; -> try to resolve x to workspaceRoot/src/x.rs or src/x/mod.rs (best-effort)
+        for (const match of content.matchAll(useRegex)) {
+            const kind = match[1]; // crate | super | self
+            const rest = match[2] || ''; // "foo::bar::{a,b}"
+            const topSeg = this.firstRustPathSegment(rest);
+            if (!topSeg)
+                continue;
+            const resolved = this.resolveRustUse(filePath, kind, topSeg);
+            if (resolved) {
+                links.push({ source: filePath, target: resolved, type: 'dependency' });
+            }
+        }
+        return links;
+    }
+    firstRustPathSegment(rest) {
+        // rest could be: "foo::bar::{a,b}" or "foo::{a,b}" or "foo::bar"
+        const cleaned = rest.trim();
+        if (!cleaned)
+            return null;
+        const seg = cleaned.split('::')[0].trim();
+        // remove braces if someone does "use crate::{foo,bar};" (edge case)
+        const seg2 = seg.replace(/[{}]/g, '').trim();
+        return seg2.length ? seg2 : null;
+    }
+    resolveRustMod(fromFile, modName) {
+        const dir = path.dirname(fromFile);
+        const candidate1 = path.join(dir, `${modName}.rs`);
+        const candidate2 = path.join(dir, modName, 'mod.rs');
+        if (fs.existsSync(candidate1))
+            return candidate1;
+        if (fs.existsSync(candidate2))
+            return candidate2;
+        return null;
+    }
+    resolveRustUse(fromFile, kind, topSeg) {
+        // Best-effort resolution:
+        // - crate::foo -> workspaceRoot/src/foo.rs or workspaceRoot/src/foo/mod.rs
+        // - self::foo  -> same directory as current file: foo.rs or foo/mod.rs
+        // - super::foo -> parent directory: foo.rs or foo/mod.rs
+        if (kind === 'crate') {
+            const base = path.join(this.workspaceRoot, 'src', topSeg);
+            const candidate1 = base + '.rs';
+            const candidate2 = path.join(base, 'mod.rs');
+            if (fs.existsSync(candidate1))
+                return candidate1;
+            if (fs.existsSync(candidate2))
+                return candidate2;
+            return null;
+        }
+        const fromDir = path.dirname(fromFile);
+        const baseDir = (kind === 'super') ? path.dirname(fromDir) : fromDir;
+        const candidate1 = path.join(baseDir, `${topSeg}.rs`);
+        const candidate2 = path.join(baseDir, topSeg, 'mod.rs');
+        if (fs.existsSync(candidate1))
+            return candidate1;
+        if (fs.existsSync(candidate2))
+            return candidate2;
+        return null;
+    }
+    // =========================
+    // NEW: C/C++ dependencies
+    // =========================
+    extractCppDependencies(filePath, content) {
+        const links = [];
+        // Match:
+        //   #include "foo.h"
+        //   #include <foo.h>
+        const includeRegex = /^\s*#\s*include\s*[<"]([^">]+)[">]/gm;
+        for (const match of content.matchAll(includeRegex)) {
+            const includePath = match[1].trim();
+            const resolved = this.resolveCppInclude(filePath, includePath);
+            if (resolved) {
+                links.push({ source: filePath, target: resolved, type: 'dependency' });
+            }
+        }
+        return links;
+    }
+    resolveCppInclude(fromFile, includePath) {
+        // MVP rule:
+        // - If it’s quoted include (or looks project-ish), try:
+        //   1) relative to current file’s directory
+        //   2) relative to workspace root
+        // - If it’s a system include (vector, stdio.h), we will likely fail and return null.
+        //
+        // We cannot reliably know include paths without compile_commands.json / build system,
+        // but this gets you useful edges for many repos.
+        const fromDir = path.dirname(fromFile);
+        const candidates = [
+            path.resolve(fromDir, includePath),
+            path.resolve(this.workspaceRoot, includePath),
+            // Common conventions:
+            path.resolve(this.workspaceRoot, 'include', includePath),
+            path.resolve(this.workspaceRoot, 'src', includePath)
+        ];
+        for (const c of candidates) {
+            if (fs.existsSync(c) && fs.statSync(c).isFile())
+                return c;
+        }
+        // If include is like "foo/bar", try adding typical header extensions
+        const ext = path.extname(includePath);
+        if (!ext) {
+            const withExtCandidates = [];
+            const exts = ['.h', '.hpp', '.hh'];
+            for (const base of [
+                path.resolve(fromDir, includePath),
+                path.resolve(this.workspaceRoot, includePath),
+                path.resolve(this.workspaceRoot, 'include', includePath),
+                path.resolve(this.workspaceRoot, 'src', includePath)
+            ]) {
+                for (const e of exts)
+                    withExtCandidates.push(base + e);
+            }
+            for (const c of withExtCandidates) {
+                if (fs.existsSync(c) && fs.statSync(c).isFile())
+                    return c;
+            }
+        }
+        return null;
     }
     resolveImportPath(fromFile, importPath) {
         const fromDir = path.dirname(fromFile);
