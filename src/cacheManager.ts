@@ -13,6 +13,9 @@ export class CacheManager {
     }
   }
 
+  // -----------------------
+  // Existing graph cache
+  // -----------------------
   async saveGraph(graph: CodebaseGraph): Promise<void> {
     try {
       const cachePath = path.join(this.cacheDir, 'graph-cache.json');
@@ -25,10 +28,8 @@ export class CacheManager {
   async loadGraph(): Promise<CodebaseGraph | null> {
     try {
       const cachePath = path.join(this.cacheDir, 'graph-cache.json');
-      if (!fs.existsSync(cachePath)) {
-        return null;
-      }
-      
+      if (!fs.existsSync(cachePath)) return null;
+
       const content = fs.readFileSync(cachePath, 'utf8');
       return JSON.parse(content);
     } catch (error) {
@@ -40,11 +41,35 @@ export class CacheManager {
   async clearCache(): Promise<void> {
     try {
       const cachePath = path.join(this.cacheDir, 'graph-cache.json');
-      if (fs.existsSync(cachePath)) {
-        fs.unlinkSync(cachePath);
-      }
+      if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
     } catch (error) {
       Logger.warn('Failed to clear cache', error as Error);
     }
   }
+
+  // -----------------------
+  // NEW: generic JSON cache helpers (used by git heat)
+  // -----------------------
+  async saveJson<T>(fileName: string, data: T): Promise<void> {
+    try {
+      const cachePath = path.join(this.cacheDir, fileName);
+      fs.writeFileSync(cachePath, JSON.stringify(data, null, 2));
+    } catch (error) {
+      Logger.warn(`Failed to save JSON cache: ${fileName}`, error as Error);
+    }
+  }
+
+  async loadJson<T>(fileName: string): Promise<T | null> {
+    try {
+      const cachePath = path.join(this.cacheDir, fileName);
+      if (!fs.existsSync(cachePath)) return null;
+
+      const content = fs.readFileSync(cachePath, 'utf8');
+      return JSON.parse(content) as T;
+    } catch (error) {
+      Logger.warn(`Failed to load JSON cache: ${fileName}`, error as Error);
+      return null;
+    }
+  }
 }
+

@@ -1,8 +1,10 @@
+// src/GraphPanel.ts
 import * as vscode from 'vscode';
 import { CodebaseGraph } from './types';
 
 export class GraphPanel {
-  private static currentPanel: GraphPanel | undefined;
+  public static currentPanel: GraphPanel | undefined;
+
   private readonly panel: vscode.WebviewPanel;
   private graph: CodebaseGraph;
 
@@ -50,6 +52,10 @@ export class GraphPanel {
         case 'openFile':
           this.openFile(message.path);
           break;
+        // (optional) if you later want webview to request git heat:
+        // case 'requestGitHeat':
+        //   ...
+        //   break;
       }
     });
   }
@@ -62,6 +68,18 @@ export class GraphPanel {
     vscode.window.showTextDocument(vscode.Uri.file(filePath));
   }
 
+  /**
+   * Send git heat results into the existing webview without rebuilding the HTML.
+   * The webview listens for { command: 'gitHeat', scoresByAbsPath, maxScore }.
+   */
+  public postGitHeat(payload: { scoresByAbsPath: Record<string, number>; maxScore: number }) {
+    this.panel.webview.postMessage({
+      command: 'gitHeat',
+      scoresByAbsPath: payload.scoresByAbsPath,
+      maxScore: payload.maxScore
+    });
+  }
+
   private getHtmlContent(): string {
     return `<!DOCTYPE html>
 <html lang="en">
@@ -71,11 +89,7 @@ export class GraphPanel {
   <title>Atlasic</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
       overflow: hidden;
@@ -83,15 +97,9 @@ export class GraphPanel {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
 
-    #graph {
-      width: 100vw;
-      height: 100vh;
-      display: block;
-    }
+    #graph { width: 100vw; height: 100vh; display: block; }
 
-    .node {
-      cursor: pointer;
-    }
+    .node { cursor: pointer; }
 
     .node circle {
       stroke: #fff;
@@ -120,7 +128,6 @@ export class GraphPanel {
     .link.highlighted {
       stroke: #61dafb;
       stroke-opacity: 1;
-      /* IMPORTANT: keep stroke-width the same so arrows don't "grow" */
       stroke-width: 1;
     }
 
@@ -144,21 +151,9 @@ export class GraphPanel {
       z-index: 1000;
     }
 
-    .tooltip-title {
-      font-weight: bold;
-      margin-bottom: 6px;
-      color: #61dafb;
-    }
-
-    .tooltip-line {
-      margin: 2px 0;
-    }
-
-    .tooltip-label {
-      color: #aaa;
-      display: inline-block;
-      width: 80px;
-    }
+    .tooltip-title { font-weight: bold; margin-bottom: 6px; color: #61dafb; }
+    .tooltip-line { margin: 2px 0; }
+    .tooltip-label { color: #aaa; display: inline-block; width: 80px; }
 
     .search-container {
       position: absolute;
@@ -174,16 +169,8 @@ export class GraphPanel {
       width: 280px;
     }
 
-    .search-title {
-      font-weight: bold;
-      margin-bottom: 8px;
-      color: #61dafb;
-    }
-
-    .search-box {
-      position: relative;
-      width: 100%;
-    }
+    .search-title { font-weight: bold; margin-bottom: 8px; color: #61dafb; }
+    .search-box { position: relative; width: 100%; }
 
     .search-input {
       width: 100%;
@@ -216,9 +203,7 @@ export class GraphPanel {
       z-index: 201;
     }
 
-    .search-suggestions.active {
-      display: block;
-    }
+    .search-suggestions.active { display: block; }
 
     .suggestion-item {
       padding: 8px;
@@ -228,20 +213,10 @@ export class GraphPanel {
       transition: background 0.2s;
     }
 
-    .suggestion-item:hover {
-      background: #444;
-    }
+    .suggestion-item:hover { background: #444; }
+    .suggestion-item.selected { background: #61dafb; color: #1e1e1e; }
 
-    .suggestion-item.selected {
-      background: #61dafb;
-      color: #1e1e1e;
-    }
-
-    .search-hint {
-      font-size: 10px;
-      color: #999;
-      margin-top: 6px;
-    }
+    .search-hint { font-size: 10px; color: #999; margin-top: 6px; }
 
     .controls {
       position: absolute;
@@ -254,18 +229,11 @@ export class GraphPanel {
       color: #fff;
       font-size: 12px;
       z-index: 100;
-      width: 230px;
+      width: 240px;
     }
 
-    .control-title {
-      font-weight: bold;
-      margin-bottom: 10px;
-      color: #61dafb;
-    }
-
-    .stat-line {
-      margin: 4px 0;
-    }
+    .control-title { font-weight: bold; margin-bottom: 10px; color: #61dafb; }
+    .stat-line { margin: 4px 0; }
 
     .legend {
       position: absolute;
@@ -280,24 +248,18 @@ export class GraphPanel {
       z-index: 100;
     }
 
-    .legend-title {
-      font-weight: bold;
-      margin-bottom: 10px;
-      color: #61dafb;
-    }
+    .legend-title { font-weight: bold; margin-bottom: 10px; color: #61dafb; }
+    .legend-item { display: flex; align-items: center; margin: 4px 0; }
+    .legend-color { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
 
-    .legend-item {
-      display: flex;
-      align-items: center;
-      margin: 4px 0;
+    /* Optional tiny status line for git heat */
+    .status {
+      margin-top: 8px;
+      font-size: 10px;
+      color: #aaa;
+      line-height: 1.3;
     }
-
-    .legend-color {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      margin-right: 8px;
-    }
+    .status strong { color: #fff; }
   </style>
 </head>
 <body>
@@ -332,10 +294,20 @@ export class GraphPanel {
         File Types
       </label>
 
-      <label style="display:flex; gap:8px; align-items:center; user-select:none;">
+      <label style="display:flex; gap:8px; align-items:center; user-select:none; margin-bottom:4px;">
         <input type="radio" name="colorMode" id="modeHeat" value="heat" />
         Heatmap (In-degree)
       </label>
+
+      <label style="display:flex; gap:8px; align-items:center; user-select:none;">
+        <input type="radio" name="colorMode" id="modeCombined" value="combined" />
+        Heatmap (Combined)
+      </label>
+
+      <div class="status" id="gitStatus">
+        Git heat: <strong id="gitStatusValue">loading…</strong><br/>
+        Max git score: <strong id="gitMax">0</strong>
+      </div>
     </div>
 
     <div class="stat-line" id="heatLegend" style="display:none; margin-top:10px;">
@@ -345,35 +317,18 @@ export class GraphPanel {
       <div style="display:flex; justify-content:space-between; font-size:10px; color:#999; margin-top:4px;">
         <span>0</span><span id="heatMax">0</span>
       </div>
+      <div style="font-size:10px; color:#999; margin-top:6px;" id="heatModeLabel"></div>
     </div>
   </div>
 
   <div class="legend" id="typesLegend">
     <div class="legend-title">📁 File Categories</div>
-    <div class="legend-item">
-      <div class="legend-color" style="background: #61dafb;"></div>
-      <span>Component</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background: #ffd700;"></div>
-      <span>Utility</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background: #ff6b6b;"></div>
-      <span>API/Service</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background: #4ecdc4;"></div>
-      <span>Test</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background: #95a5a6;"></div>
-      <span>Config</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background: #9b59b6;"></div>
-      <span>Model</span>
-    </div>
+    <div class="legend-item"><div class="legend-color" style="background: #61dafb;"></div><span>Component</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #ffd700;"></div><span>Utility</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #ff6b6b;"></div><span>API/Service</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #4ecdc4;"></div><span>Test</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #95a5a6;"></div><span>Config</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #9b59b6;"></div><span>Model</span></div>
   </div>
 
   <script>
@@ -387,33 +342,72 @@ export class GraphPanel {
     document.getElementById('nodeCount').textContent = graphData.nodes.length;
     document.getElementById('linkCount').textContent = graphData.links.length;
 
-    // ---- Heatmap: compute in-degree (how many files import this file) ----
+    // ---- Heatmap: compute in-degree (dependencies) ----
     const inDegree = new Map();
     graphData.nodes.forEach(n => inDegree.set(n.id, 0));
 
-    // IMPORTANT: links may be strings initially; D3 later mutates them to objects
     graphData.links.forEach(l => {
       const targetId = (typeof l.target === 'string') ? l.target : l.target.id;
       inDegree.set(targetId, (inDegree.get(targetId) || 0) + 1);
     });
 
-    // Attach inDegree onto node objects for easy access
     graphData.nodes.forEach(n => {
       n.inDegree = inDegree.get(n.id) || 0;
+      n.gitScore = 0; // default until we receive gitHeat message
     });
 
     const maxInDegree = d3.max(graphData.nodes, d => d.inDegree) || 0;
     document.getElementById('heatMax').textContent = String(maxInDegree);
 
-    // Heat scale (0 -> max)
-    const heatTMin = 0.15; // 0 maps here (blue-ish instead of black/purple)
+    // ---- Git heat payload (arrives later) ----
+    let maxGit = 0;
+    document.getElementById('gitMax').textContent = '0';
+    document.getElementById('gitStatusValue').textContent = 'loading…';
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (!msg || msg.command !== 'gitHeat') return;
+
+      const scores = msg.scoresByAbsPath || {};
+      maxGit = msg.maxScore || 0;
+
+      graphData.nodes.forEach(n => {
+        n.gitScore = scores[n.id] || 0;
+      });
+
+      document.getElementById('gitMax').textContent = String(maxGit);
+      document.getElementById('gitStatusValue').textContent = 'ready';
+      applyNodeColors();
+    });
+
+    // Heat scale (0 -> max), visually nice floor
+    const heatTMin = 0.15;
     const heatTMax = 1.0;
+
+    function heatColorFrom01(t01) {
+      const t2 = heatTMin + (heatTMax - heatTMin) * t01;
+      return d3.interpolateTurbo(t2);
+    }
 
     function heatColor(v) {
       const denom = Math.max(1, maxInDegree);
-      const t = v / denom; // 0..1
-      const t2 = heatTMin + (heatTMax - heatTMin) * t; // 0.15..1
-      return d3.interpolateTurbo(t2);
+      return heatColorFrom01(v / denom);
+    }
+
+    // Combined:
+    function normDep(v) {
+      return (Math.max(0, v) / Math.max(1, maxInDegree));
+    }
+
+    function normGit(v) {
+      if (!maxGit) return 0;
+      // log compression helps huge repos a lot
+      return Math.log1p(Math.max(0, v)) / Math.log1p(maxGit);
+    }
+
+    function combinedT01(d) {
+      const a = 0.5; // weight: dependencies vs git
+      return a * normDep(d.inDegree || 0) + (1 - a) * normGit(d.gitScore || 0);
     }
 
     // Color scale by category
@@ -422,10 +416,13 @@ export class GraphPanel {
       .range(['#61dafb', '#ffd700', '#ff6b6b', '#4ecdc4', '#95a5a6', '#9b59b6', '#95a5a6']);
 
     // Color mode toggle
-    let colorMode = 'types'; // 'types' | 'heat'
+    let colorMode = 'types'; // 'types' | 'heat' | 'combined'
 
     function nodeFill(d) {
-      return (colorMode === 'heat') ? heatColor(d.inDegree) : color(d.category);
+      if (colorMode === 'types') return color(d.category);
+      if (colorMode === 'heat') return heatColor(d.inDegree || 0);
+      // combined
+      return heatColorFrom01(combinedT01(d));
     }
 
     const svg = d3.select('#graph')
@@ -434,18 +431,17 @@ export class GraphPanel {
       .attr('height', height);
 
     // ---- Arrow marker definition ----
-    // Marker uses "context-stroke" so arrow matches the line color (including highlight).
     const defs = svg.append('defs');
 
     defs.append('marker')
       .attr('id', 'arrowhead')
       .attr('viewBox', '0 -5 10 10')
-      .attr('refX', 9)                // <-- TUNE: smaller pushes arrowhead forward
+      .attr('refX', 9)
       .attr('refY', 0)
       .attr('markerWidth', 8)
       .attr('markerHeight', 8)
       .attr('orient', 'auto')
-      .attr('markerUnits', 'userSpaceOnUse') // <-- keeps arrow size fixed (no "growing")
+      .attr('markerUnits', 'userSpaceOnUse')
       .append('path')
       .attr('d', 'M0,-5L10,0L0,5')
       .attr('fill', 'context-stroke')
@@ -453,7 +449,6 @@ export class GraphPanel {
 
     const g = svg.append('g');
 
-    // Add zoom behavior
     const zoom = d3.zoom()
       .scaleExtent([0.1, 10])
       .on('zoom', (event) => {
@@ -462,7 +457,6 @@ export class GraphPanel {
 
     svg.call(zoom);
 
-    // Create simulation
     const simulation = d3.forceSimulation(graphData.nodes)
       .force('link', d3.forceLink(graphData.links)
         .id(d => d.id)
@@ -474,7 +468,6 @@ export class GraphPanel {
       .alpha(1)
       .alphaDecay(0.03);
 
-    // Create links (with arrowheads)
     const link = g.append('g')
       .selectAll('line')
       .data(graphData.links)
@@ -483,7 +476,6 @@ export class GraphPanel {
       .attr('stroke-width', 1)
       .attr('marker-end', 'url(#arrowhead)');
 
-    // Create nodes
     const node = g.append('g')
       .selectAll('g')
       .data(graphData.nodes)
@@ -506,9 +498,13 @@ export class GraphPanel {
 
     function applyNodeColors() {
       node.select('circle').attr('fill', d => nodeFill(d));
+      // update the legend label text
+      const heatModeLabel = document.getElementById('heatModeLabel');
+      if (colorMode === 'heat') heatModeLabel.textContent = 'Heat = in-degree (dependencies)';
+      else if (colorMode === 'combined') heatModeLabel.textContent = 'Heat = 50% in-degree + 50% git touches';
+      else heatModeLabel.textContent = '';
     }
 
-    // Legends toggling
     const typesLegend = document.getElementById('typesLegend');
     const heatLegend = document.getElementById('heatLegend');
 
@@ -516,8 +512,9 @@ export class GraphPanel {
       colorMode = mode;
 
       // show/hide legends
+      const isHeatish = (mode === 'heat' || mode === 'combined');
       typesLegend.style.display = (mode === 'types') ? 'block' : 'none';
-      heatLegend.style.display = (mode === 'heat') ? 'block' : 'none';
+      heatLegend.style.display = isHeatish ? 'block' : 'none';
 
       applyNodeColors();
     }
@@ -528,6 +525,10 @@ export class GraphPanel {
 
     document.getElementById('modeHeat').addEventListener('change', (e) => {
       if (e.target.checked) applyColorMode('heat');
+    });
+
+    document.getElementById('modeCombined').addEventListener('change', (e) => {
+      if (e.target.checked) applyColorMode('combined');
     });
 
     // initialize
@@ -563,7 +564,6 @@ export class GraphPanel {
         );
     }
 
-    // Click counter for double click detection
     let clickTimer;
     let clickCount = 0;
 
@@ -574,15 +574,10 @@ export class GraphPanel {
         .style('top', (event.pageY + 10) + 'px')
         .html(\`
           <div class="tooltip-title">\${d.label}</div>
-          <div class="tooltip-line">
-            <span class="tooltip-label">Path:</span><span>\${d.id}</span>
-          </div>
-          <div class="tooltip-line">
-            <span class="tooltip-label">Category:</span><span>\${d.category}</span>
-          </div>
-          <div class="tooltip-line">
-            <span class="tooltip-label">In-degree:</span><span>\${d.inDegree ?? 0}</span>
-          </div>
+          <div class="tooltip-line"><span class="tooltip-label">Path:</span><span>\${d.id}</span></div>
+          <div class="tooltip-line"><span class="tooltip-label">Category:</span><span>\${d.category}</span></div>
+          <div class="tooltip-line"><span class="tooltip-label">In-degree:</span><span>\${d.inDegree ?? 0}</span></div>
+          <div class="tooltip-line"><span class="tooltip-label">Git:</span><span>\${d.gitScore ?? 0}</span></div>
           \${d.language ? '<div class="tooltip-line"><span class="tooltip-label">Language:</span><span>' + d.language + '</span></div>' : ''}
         \`);
     })
@@ -593,7 +588,6 @@ export class GraphPanel {
       clickCount++;
 
       if (clickCount === 1) {
-        // Single click
         highlightNode(d);
         zoomToNode(d);
 
@@ -601,13 +595,9 @@ export class GraphPanel {
           clickCount = 0;
         }, 350);
       } else if (clickCount === 2) {
-        // Double click
         clearTimeout(clickTimer);
         clickCount = 0;
-        vscode.postMessage({
-          command: 'openFile',
-          path: d.id
-        });
+        vscode.postMessage({ command: 'openFile', path: d.id });
       }
     });
 
@@ -711,12 +701,7 @@ export class GraphPanel {
       const dist = Math.sqrt(dx*dx + dy*dy) || 1;
       const ux = dx / dist;
       const uy = dy / dist;
-      return {
-        x1: sx,
-        y1: sy,
-        x2: tx - ux * targetPad,
-        y2: ty - uy * targetPad
-      };
+      return { x1: sx, y1: sy, x2: tx - ux * targetPad, y2: ty - uy * targetPad };
     }
 
     simulation.on('tick', () => {
@@ -726,9 +711,7 @@ export class GraphPanel {
         const tx = d.target.x;
         const ty = d.target.y;
 
-        // TUNE: smaller => arrowhead closer to node
         const targetPad = NODE_R + 2;
-
         const p = shortenLine(sx, sy, tx, ty, targetPad);
 
         d3.select(this)
@@ -741,7 +724,6 @@ export class GraphPanel {
       node.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
     });
 
-    // Drag functions
     function dragstarted(event, d) {
       if (!event.active) simulation.alphaTarget(0.3).restart();
       d.fx = d.x;
