@@ -4,6 +4,10 @@
   "description": "AI-powered codebase visualization and dependency graph tool",
   "version": "1.0.0",
   "publisher": "atlasic",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DiegoArmstrong/Atlasic"
+  },
   "engines": {
     "vscode": "^1.108.1"
   },
