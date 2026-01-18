@@ -323,7 +323,24 @@ export class GraphPanel {
     <div class="control-title">📊 Graph Stats</div>
     <div class="stat-line">Nodes: <strong id="nodeCount">0</strong></div>
     <div class="stat-line">Links: <strong id="linkCount">0</strong></div>
+
+    <div class="stat-line">
+      <label style="display:flex; gap:8px; align-items:center; user-select:none;">
+        <input type="checkbox" id="heatToggle" />
+        Heatmap (In-degree)
+      </label>
+    </div>
+
+    <div class="stat-line" id="heatLegend" style="display:none; margin-top:8px;">
+      <div style="font-size:11px; color:#aaa; margin-bottom:4px;">Cold → Hot</div>
+      <div style="height:10px; border-radius:6px; border:1px solid #444;
+                  background: linear-gradient(to right, #2c7bb6, #ffffbf, #d7191c);"></div>
+      <div style="display:flex; justify-content:space-between; font-size:10px; color:#999; margin-top:4px;">
+        <span>0</span><span id="heatMax">0</span>
+      </div>
+    </div>
   </div>
+
   <div class="legend">
     <div class="legend-title">📁 File Categories</div>
     <div class="legend-item">
@@ -351,6 +368,7 @@ export class GraphPanel {
       <span>Model</span>
     </div>
   </div>
+
   <script>
     const vscode = acquireVsCodeApi();
     const graphData = ${JSON.stringify(this.graph)};
@@ -361,7 +379,38 @@ export class GraphPanel {
     // Update stats
     document.getElementById('nodeCount').textContent = graphData.nodes.length;
     document.getElementById('linkCount').textContent = graphData.links.length;
-    
+
+    // ---- Heatmap: compute in-degree (how many files import this file) ----
+    const inDegree = new Map();
+    graphData.nodes.forEach(n => inDegree.set(n.id, 0));
+
+    // IMPORTANT: links may be strings initially; D3 later mutates them to objects
+    graphData.links.forEach(l => {
+      const targetId = (typeof l.target === 'string') ? l.target : l.target.id;
+      inDegree.set(targetId, (inDegree.get(targetId) || 0) + 1);
+    });
+
+    // Attach inDegree onto node objects for easy access
+    graphData.nodes.forEach(n => {
+      n.inDegree = inDegree.get(n.id) || 0;
+    });
+
+    const maxInDegree = d3.max(graphData.nodes, d => d.inDegree) || 0;
+    document.getElementById('heatMax').textContent = String(maxInDegree);
+
+    // Heat scale (0 -> max)
+    const heatTMin = 0.15; // 0 maps here (blue-ish instead of black/purple)
+    const heatTMax = 1.0;
+
+    function heatColor(v) {
+      const denom = Math.max(1, maxInDegree);
+      const t = v / denom; // 0..1
+      const t2 = heatTMin + (heatTMax - heatTMin) * t; // 0.15..1
+      return d3.interpolateTurbo(t2);
+    }
+
+    let heatmapEnabled = false;
+
     const svg = d3.select('#graph')
       .append('svg')
       .attr('width', width)
@@ -382,6 +431,10 @@ export class GraphPanel {
     const color = d3.scaleOrdinal()
       .domain(['component', 'utility', 'api', 'test', 'config', 'model', 'other'])
       .range(['#61dafb', '#ffd700', '#ff6b6b', '#4ecdc4', '#95a5a6', '#9b59b6', '#95a5a6']);
+
+    function nodeFill(d) {
+      return heatmapEnabled ? heatColor(d.inDegree) : color(d.category);
+    }
     
     // Create simulation with improved forces
     const simulation = d3.forceSimulation(graphData.nodes)
@@ -416,11 +469,24 @@ export class GraphPanel {
     
     node.append('circle')
       .attr('r', 8)
-      .attr('fill', d => color(d.category));
+      .attr('fill', d => nodeFill(d));
     
     node.append('text')
       .attr('dy', 22)
       .text(d => d.label);
+
+    function applyNodeColors() {
+      node.select('circle').attr('fill', d => nodeFill(d));
+    }
+
+    const heatToggle = document.getElementById('heatToggle');
+    const heatLegend = document.getElementById('heatLegend');
+
+    heatToggle.addEventListener('change', (e) => {
+      heatmapEnabled = e.target.checked;
+      heatLegend.style.display = heatmapEnabled ? 'block' : 'none';
+      applyNodeColors();
+    });
     
     // Tooltips
     const tooltip = d3.select('#tooltip');
@@ -451,8 +517,6 @@ export class GraphPanel {
     // Zoom to node function
     function zoomToNode(d) {
       const scale = 2;
-      const x = d.x * scale - width / 2;
-      const y = d.y * scale - height / 2;
       
       svg.transition()
         .duration(750)
@@ -478,6 +542,9 @@ export class GraphPanel {
           </div>
           <div class="tooltip-line">
             <span class="tooltip-label">Category:</span><span>\${d.category}</span>
+          </div>
+          <div class="tooltip-line">
+            <span class="tooltip-label">In-degree:</span><span>\${d.inDegree ?? 0}</span>
           </div>
           \${d.language ? '<div class="tooltip-line"><span class="tooltip-label">Language:</span><span>' + d.language + '</span></div>' : ''}
         \`);
@@ -639,3 +706,4 @@ export class GraphPanel {
 </html>`;
   }
 }
+
