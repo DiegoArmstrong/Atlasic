@@ -1,3 +1,4 @@
+// src/extension.ts
 import * as vscode from 'vscode';
 import { GraphGenerator } from './graphGenerator';
 import { GraphPanel } from './graphPanel';
@@ -8,13 +9,31 @@ import { DebugContextCollector } from './services/debugContextCollector';
 import { DebugChatPanel } from './features/debugChat';
 import { GitAnalyzer } from './features/gitAnalyzer';
 
+// NEW: git-heat (your streaming git heat service from steps 1-4)
+import { GitHeatService } from './gitHeat';
+
 // Global state for AI services
 let apiClient: OpenRouterClient | undefined;
 let debugCollector: DebugContextCollector | undefined;
 let gitAnalyzer: GitAnalyzer | undefined;
 let workspaceRoot: string;
 
-async function initializeAIServices(config: vscode.WorkspaceConfiguration, updateUI: (client: OpenRouterClient | undefined, collector: DebugContextCollector | undefined, analyzer: GitAnalyzer | undefined) => void) {
+type GitHeatCache = {
+  head: string;
+  windowDays: number;
+  metric: 'touches';
+  scoresByAbsPath: Record<string, number>;
+  maxScore: number;
+};
+
+async function initializeAIServices(
+  config: vscode.WorkspaceConfiguration,
+  updateUI: (
+    client: OpenRouterClient | undefined,
+    collector: DebugContextCollector | undefined,
+    analyzer: GitAnalyzer | undefined
+  ) => void
+) {
   const aiEnabled = config.get<boolean>('enableAIFeatures', true);
 
   if (!aiEnabled) {
@@ -59,6 +78,67 @@ async function initializeAIServices(config: vscode.WorkspaceConfiguration, updat
   }
 }
 
+/**
+ * NEW: fire-and-forget git heat computation + caching + webview postMessage
+ * Safe to call after GraphPanel.createOrShow(...).
+ */
+async function maybeSendGitHeat(
+  cacheManager: CacheManager,
+  workspaceRoot: string
+): Promise<void> {
+  try {
+    // If panel isn’t open yet, nothing to post to
+    if (!GraphPanel.currentPanel) return;
+
+    const git = new GitHeatService(workspaceRoot);
+
+    const repoRoot = await git.getRepoRoot();
+    if (!repoRoot) {
+      Logger.warn('Atlasic: Not a git repo (no repo root found).', new Error('Not a git repo'));
+      return;
+    }
+
+    const head = await git.getHead(repoRoot);
+    if (!head) return;
+
+    const windowDays = 30; // hackathon default: fast + meaningful
+    const metric: GitHeatCache['metric'] = 'touches';
+
+    const cacheFile = `git-heat-${metric}-${windowDays}d-${head}.json`;
+    const cached = await cacheManager.loadJson<GitHeatCache>(cacheFile);
+
+    if (cached && cached.head === head && cached.windowDays === windowDays) {
+      GraphPanel.currentPanel?.postGitHeat({
+        scoresByAbsPath: cached.scoresByAbsPath,
+        maxScore: cached.maxScore
+      });
+      return;
+    }
+
+    // compute (stream parsing inside GitHeatService)
+    const scoresByAbsPath = await git.computeTouches(repoRoot, windowDays);
+    const values = Object.values(scoresByAbsPath);
+    const maxScore = values.length ? Math.max(...values) : 0;
+
+    const payload: GitHeatCache = {
+      head,
+      windowDays,
+      metric,
+      scoresByAbsPath,
+      maxScore
+    };
+
+    await cacheManager.saveJson(cacheFile, payload);
+
+    GraphPanel.currentPanel?.postGitHeat({
+      scoresByAbsPath,
+      maxScore
+    });
+  } catch (err) {
+    Logger.warn('Atlasic: git heat failed', err as Error);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 
@@ -77,7 +157,11 @@ export async function activate(context: vscode.ExtensionContext) {
   let statusBar: vscode.StatusBarItem;
 
   // Function to update menu visibility based on AI services availability
-  const updateMenuVisibility = (client: OpenRouterClient | undefined, collector: DebugContextCollector | undefined, analyzer: GitAnalyzer | undefined) => {
+  const updateMenuVisibility = (
+    client: OpenRouterClient | undefined,
+    collector: DebugContextCollector | undefined,
+    analyzer: GitAnalyzer | undefined
+  ) => {
     // This will be called whenever AI services change
     Logger.info(`Menu updated: AI services ${client ? 'enabled' : 'disabled'}`);
   };
@@ -141,7 +225,11 @@ export async function activate(context: vscode.ExtensionContext) {
   // Watch for configuration changes
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(async (event) => {
-      if (event.affectsConfiguration('atlasic.apiKey') || event.affectsConfiguration('atlasic.aiModel') || event.affectsConfiguration('atlasic.enableAIFeatures')) {
+      if (
+        event.affectsConfiguration('atlasic.apiKey') ||
+        event.affectsConfiguration('atlasic.aiModel') ||
+        event.affectsConfiguration('atlasic.enableAIFeatures')
+      ) {
         Logger.info('Atlasic configuration changed, reinitializing AI services...');
         const updatedConfig = vscode.workspace.getConfiguration('atlasic');
         await initializeAIServices(updatedConfig, updateMenuVisibility);
@@ -186,6 +274,9 @@ export async function activate(context: vscode.ExtensionContext) {
             async () => {
               const graph = await cacheManager.loadGraph() || await graphGenerator.generateGraph();
               GraphPanel.createOrShow(context.extensionUri, graph);
+
+              // NEW: compute + send git heat after visualizer opens
+              void maybeSendGitHeat(cacheManager, workspaceRoot);
             }
           );
         } catch (error) {
@@ -208,6 +299,10 @@ export async function activate(context: vscode.ExtensionContext) {
               const graph = await graphGenerator.generateGraph();
               await cacheManager.saveGraph(graph);
               GraphPanel.refresh(graph);
+
+              // NEW: re-send git heat (panel exists already). Uses cache if possible.
+              void maybeSendGitHeat(cacheManager, workspaceRoot);
+
               vscode.window.showInformationMessage('✅ Graph refreshed!');
             }
           );
@@ -222,6 +317,10 @@ export async function activate(context: vscode.ExtensionContext) {
       async () => {
         try {
           await cacheManager.clearCache();
+
+          // Optional: you may also want to delete git heat caches; depends on your CacheManager implementation.
+          // If you add a "clearAll" method, call it here.
+
           vscode.window.showInformationMessage('✅ Cache cleared!');
         } catch (error) {
           Logger.error('Error clearing cache', error as Error);
@@ -257,12 +356,12 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('atlasic.displayGraph', async () => {
       try {
         const cachedData = await cacheManager.loadGraph();
-        
+
         if (cachedData) {
-          // Display cached graph
           GraphPanel.createOrShow(context.extensionUri, cachedData);
+          // NEW: try to send git heat immediately (cached if possible)
+          void maybeSendGitHeat(cacheManager, workspaceRoot);
         } else {
-          // Generate new graph
           await vscode.window.withProgress(
             {
               location: vscode.ProgressLocation.Notification,
@@ -273,6 +372,9 @@ export async function activate(context: vscode.ExtensionContext) {
               const graphData = await graphGenerator.generateGraph();
               await cacheManager.saveGraph(graphData);
               GraphPanel.createOrShow(context.extensionUri, graphData);
+
+              // NEW: compute + send git heat after panel is open
+              void maybeSendGitHeat(cacheManager, workspaceRoot);
             }
           );
         }
@@ -287,3 +389,4 @@ export async function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   // Cleanup
 }
+
