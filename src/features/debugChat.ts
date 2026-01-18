@@ -94,8 +94,8 @@ export class DebugChatPanel {
           case 'linkJiraTicket':
             await this._handleJiraLinking(message.ticketUrl);
             break;
-          case 'configureJira':
-            await this._handleJiraConfiguration();
+          case 'jiraMenuChoice':
+            await this._handleJiraMenuChoice(message.choice, message.data);
             break;
         }
       },
@@ -387,54 +387,54 @@ export class DebugChatPanel {
     }
   }
 
-  private async _handleJiraConfiguration() {
+  private async _handleJiraMenuChoice(choice: string, data?: any) {
     try {
-      const workspaceUrl = await vscode.window.showInputBox({
-        prompt: 'Enter your Jira Cloud workspace URL (e.g., https://yourname.atlassian.net)',
-        placeHolder: 'https://yourname.atlassian.net'
-      });
+      Logger.info(`Handling Jira menu choice: ${choice}`);
+      if (choice === 'configure') {
+        // Configure Jira connection - use data from modal if provided
+        if (data) {
+          const { url, email, token } = data;
+          
+          this.jiraClient = new JiraClient({
+            workspaceUrl: url,
+            accessToken: token,
+            userEmail: email
+          });
 
-      if (!workspaceUrl) return;
+          const isValid = await this.jiraClient.validateConnection();
+          if (!isValid) {
+            this._panel.webview.postMessage({
+              command: 'error',
+              message: 'Jira authentication failed'
+            });
+            this.jiraClient = undefined;
+            return;
+          }
 
-      const userEmail = await vscode.window.showInputBox({
-        prompt: 'Enter your Jira email address',
-        placeHolder: 'user@example.com'
-      });
+          this._panel.webview.postMessage({
+            command: 'jiraConfigured'
+          });
+        }
+      } else if (choice === 'link') {
+        // Link a Jira ticket
+        if (!this.jiraClient) {
+          this._panel.webview.postMessage({
+            command: 'error',
+            message: 'Jira not configured. Please configure first.'
+          });
+          return;
+        }
 
-      if (!userEmail) return;
-
-      const accessToken = await vscode.window.showInputBox({
-        prompt: 'Enter your Jira API token',
-        password: true,
-        placeHolder: 'Your API token from Jira account settings'
-      });
-
-      if (!accessToken) return;
-
-      this.jiraClient = new JiraClient({
-        workspaceUrl,
-        accessToken,
-        userEmail
-      });
-
-      const isValid = await this.jiraClient.validateConnection();
-      if (!isValid) {
-        this._panel.webview.postMessage({
-          command: 'error',
-          message: 'Jira authentication failed'
-        });
-        this.jiraClient = undefined;
-        return;
+        if (data && data.ticketUrl) {
+          await this._handleJiraLinking(data.ticketUrl);
+        }
       }
-
-      this._panel.webview.postMessage({
-        command: 'jiraConfigured'
-      });
     } catch (error) {
-      Logger.error('Jira configuration error', error as Error);
+      Logger.error('Jira menu choice error', error as Error);
+      console.error('Jira menu error:', error);
       this._panel.webview.postMessage({
         command: 'error',
-        message: `Configuration failed: ${(error as Error).message}`
+        message: `Error: ${(error as Error).message}`
       });
     }
   }
@@ -625,7 +625,7 @@ Be concise but thorough. Focus on actionable insights.`;
       background: var(--vscode-button-secondaryHoverBackground);
     }
 
-    #uploadFilesBtn, #jiraBtn {
+    #uploadFilesBtn, #jiraConfigureBtn, #jiraLinkBtn {
       padding: 4px 12px;
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
@@ -635,7 +635,7 @@ Be concise but thorough. Focus on actionable insights.`;
       font-size: 12px;
     }
     
-    #uploadFilesBtn:hover, #jiraBtn:hover {
+    #uploadFilesBtn:hover, #jiraConfigureBtn:hover, #jiraLinkBtn:hover {
       background: var(--vscode-button-secondaryHoverBackground);
     }
 
@@ -848,6 +848,127 @@ Be concise but thorough. Focus on actionable insights.`;
       opacity: 0.5;
       cursor: not-allowed;
     }
+    
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    
+    .modal-content {
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+      width: 90%;
+    }
+    
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    
+    .modal-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--vscode-foreground);
+    }
+    
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: var(--vscode-foreground);
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .modal-close:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+    
+    #jiraForm {
+      padding: 16px;
+    }
+    
+    .form-group {
+      margin-bottom: 16px;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .form-group label {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--vscode-foreground);
+    }
+    
+    .form-group input {
+      padding: 8px 12px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 4px;
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+    }
+    
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--vscode-focusBorder);
+    }
+    
+    .modal-buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      padding-top: 8px;
+    }
+    
+    .btn-primary, .btn-secondary {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    
+    .btn-primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    
+    .btn-primary:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+    
+    .btn-secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
   </style>
 </head>
 <body>
@@ -855,7 +976,8 @@ Be concise but thorough. Focus on actionable insights.`;
     <h2>🤖 Debug Assistant</h2>
     <div style="display: flex; gap: 8px;">
       <button id="uploadFilesBtn" title="Upload context files">📁 Upload</button>
-      <button id="jiraBtn" title="Link Jira ticket">🔗 Jira</button>
+      <button id="jiraConfigureBtn" title="Configure Jira">⚙️ Jira Config</button>
+      <button id="jiraLinkBtn" title="Link Jira ticket">🔗 Link Ticket</button>
       <button id="clearBtn">Clear Chat</button>
     </div>
   </div>
@@ -869,6 +991,38 @@ Be concise but thorough. Focus on actionable insights.`;
     <button id="sendBtn">Send</button>
   </div>
 
+  <!-- Jira Configuration Modal -->
+  <div id="jiraModal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modalTitle">Configure Jira</h3>
+        <button class="modal-close" id="modalCloseBtn">&times;</button>
+      </div>
+      <form id="jiraForm">
+        <div class="form-group">
+          <label for="jiraUrlInput">Workspace URL:</label>
+          <input type="text" id="jiraUrlInput" placeholder="https://yourname.atlassian.net" required>
+        </div>
+        <div class="form-group">
+          <label for="jiraEmailInput">Email:</label>
+          <input type="email" id="jiraEmailInput" placeholder="user@example.com" required>
+        </div>
+        <div class="form-group">
+          <label for="jiraTokenInput">API Token:</label>
+          <input type="password" id="jiraTokenInput" placeholder="Your API token" required>
+        </div>
+        <div class="form-group" id="ticketUrlGroup" style="display: none;">
+          <label for="ticketUrlInput">Ticket URL:</label>
+          <input type="text" id="ticketUrlInput" placeholder="https://workspace.atlassian.net/browse/PROJ-123">
+        </div>
+        <div class="modal-buttons">
+          <button type="button" id="modalCancelBtn" class="btn-secondary">Cancel</button>
+          <button type="submit" id="modalSubmitBtn" class="btn-primary">Submit</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script>
     const vscode = acquireVsCodeApi();
     const chatContainer = document.getElementById('chatContainer');
@@ -876,8 +1030,24 @@ Be concise but thorough. Focus on actionable insights.`;
     const sendBtn = document.getElementById('sendBtn');
     const clearBtn = document.getElementById('clearBtn');
     const uploadFilesBtn = document.getElementById('uploadFilesBtn');
-    const jiraBtn = document.getElementById('jiraBtn');
+    const jiraConfigureBtn = document.getElementById('jiraConfigureBtn');
+    const jiraLinkBtn = document.getElementById('jiraLinkBtn');
     const contextDisplay = document.getElementById('contextDisplay');
+    
+    // Modal elements
+    const jiraModal = document.getElementById('jiraModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const jiraForm = document.getElementById('jiraForm');
+    const modalCloseBtn = document.getElementById('modalCloseBtn');
+    const modalCancelBtn = document.getElementById('modalCancelBtn');
+    const modalSubmitBtn = document.getElementById('modalSubmitBtn');
+    const jiraUrlInput = document.getElementById('jiraUrlInput');
+    const jiraEmailInput = document.getElementById('jiraEmailInput');
+    const jiraTokenInput = document.getElementById('jiraTokenInput');
+    const ticketUrlInput = document.getElementById('ticketUrlInput');
+    const ticketUrlGroup = document.getElementById('ticketUrlGroup');
+    
+    let currentModalMode = null; // 'configure' or 'link'
     
     let isProcessing = false;
     let jiraConfigured = false;
@@ -887,19 +1057,78 @@ Be concise but thorough. Focus on actionable insights.`;
       vscode.postMessage({ command: 'requestFileSelection' });
     });
 
-    // Jira handling
-    jiraBtn.addEventListener('click', () => {
-      if (!jiraConfigured) {
-        vscode.postMessage({ command: 'configureJira' });
-      } else {
-        const url = prompt('Enter Jira ticket URL (e.g., https://workspace.atlassian.net/browse/PROJ-123):');
-        if (url) {
-          vscode.postMessage({
-            command: 'linkJiraTicket',
-            ticketUrl: url
-          });
-        }
+    // Modal functions
+    function showModal(mode) {
+      currentModalMode = mode;
+      if (mode === 'configure') {
+        modalTitle.textContent = 'Configure Jira';
+        ticketUrlGroup.style.display = 'none';
+        jiraUrlInput.placeholder = 'https://yourname.atlassian.net';
+        jiraEmailInput.placeholder = 'user@example.com';
+        jiraTokenInput.placeholder = 'Your API token';
+        jiraUrlInput.required = true;
+        jiraEmailInput.required = true;
+        jiraTokenInput.required = true;
+        jiraForm.reset();
+      } else if (mode === 'link') {
+        modalTitle.textContent = 'Link Jira Ticket';
+        ticketUrlGroup.style.display = 'flex';
+        jiraUrlInput.required = false;
+        jiraEmailInput.required = false;
+        jiraTokenInput.required = false;
+        ticketUrlInput.required = true;
+        jiraForm.reset();
       }
+      jiraModal.style.display = 'flex';
+      if (currentModalMode === 'link') {
+        ticketUrlInput.focus();
+      } else {
+        jiraUrlInput.focus();
+      }
+    }
+
+    function closeModal() {
+      jiraModal.style.display = 'none';
+      currentModalMode = null;
+      jiraForm.reset();
+    }
+
+    // Modal event listeners
+    modalCloseBtn.addEventListener('click', closeModal);
+    modalCancelBtn.addEventListener('click', closeModal);
+    
+    jiraForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (currentModalMode === 'configure') {
+        vscode.postMessage({
+          command: 'jiraMenuChoice',
+          choice: 'configure',
+          data: {
+            url: jiraUrlInput.value,
+            email: jiraEmailInput.value,
+            token: jiraTokenInput.value
+          }
+        });
+      } else if (currentModalMode === 'link') {
+        vscode.postMessage({
+          command: 'jiraMenuChoice',
+          choice: 'link',
+          data: {
+            ticketUrl: ticketUrlInput.value
+          }
+        });
+      }
+      closeModal();
+    });
+
+    // Jira handling - Configure button
+    jiraConfigureBtn.addEventListener('click', () => {
+      showModal('configure');
+    });
+
+    // Jira handling - Link Ticket button
+    jiraLinkBtn.addEventListener('click', () => {
+      showModal('link');
     });
     
     function addMessage(role, content) {
