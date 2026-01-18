@@ -1,0 +1,13 @@
+[package]
+name = "atlasic_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", features = ["napi6"] }
+napi-derive = "2"
+walkdir = "2"
+

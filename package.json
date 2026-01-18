@@ -29,9 +29,16 @@
     "Other"
   ],
   "activationEvents": [
-      "onStartupFinished"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
+  "files": [
+    "dist/**",
+    "images/**",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
   "contributes": {
     "commands": [
       {
@@ -122,12 +129,14 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build:native && npm run compile",
+    "build:native": "napi build --manifest-path native/Cargo.toml --release --platform --output-dir dist/native",
     "compile": "tsc -p ./ && node esbuild.js",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts"
   },
   "devDependencies": {
+    "@napi-rs/cli": "^3.5.1",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.108.1",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
@@ -135,6 +144,5 @@
     "esbuild": "^0.19.11",
     "eslint": "^8.55.0",
     "typescript": "^5.3.3"
-  },
-  "dependencies": {}
+  }
 }

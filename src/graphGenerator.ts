@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { discoverFilesNative } from './native';
 import { GraphNode, GraphLink, CodebaseGraph } from './types';
 import { Logger } from './utils/logger';
 import {
@@ -118,7 +119,16 @@ export class GraphGenerator {
   async generateGraph(): Promise<CodebaseGraph> {
     const nodes: Map<string, GraphNode> = new Map();
     const links: GraphLink[] = [];
-    const files = this.discoverFiles(this.workspaceRoot);
+
+    const nativeFiles = discoverFilesNative(
+        this.workspaceRoot,
+        this.ignorePatterns,
+        this.maxDepth,
+        this.supportedExtensions
+    );
+
+    const files = nativeFiles ?? this.discoverFiles(this.workspaceRoot);
+
 
     // Extract all dependencies from discovered files
     for (const filePath of files) {
