@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as fsPromises from 'fs/promises';
 import * as path from 'path';
 import { GraphNode, GraphLink, CodebaseGraph } from './types';
 import { Logger } from './utils/logger';
@@ -9,12 +10,15 @@ import {
   PATH_ALIAS_LOCATIONS
 } from './utils/constants';
 
+const MAX_CONCURRENT_READS = 50;
+
 export class GraphGenerator {
   private workspaceRoot: string;
   private pathAliases: Map<string, string>;
   private ignorePatterns: string[];
   private maxDepth: number;
   private supportedExtensions: string[];
+  private fileSystemIndex: Set<string> = new Set();
 
   constructor(
     workspaceRoot: string,
@@ -123,25 +127,50 @@ export class GraphGenerator {
   async generateGraph(): Promise<CodebaseGraph> {
     const nodes: Map<string, GraphNode> = new Map();
     const links: GraphLink[] = [];
-    const files = this.discoverFiles(this.workspaceRoot);
 
-    // Extract all dependencies from discovered files
+    const files = await this.discoverFiles(this.workspaceRoot);
+    
+    // Populate the index for fast lookups
+    this.fileSystemIndex = new Set(files);
+
+    // Initialize nodes
     for (const filePath of files) {
-      if (!nodes.has(filePath)) {
-        nodes.set(filePath, this.createNode(filePath));
-      }
-
-      const content = fs.readFileSync(filePath, 'utf8');
-      const fileLinks = this.extractDependencies(filePath, content);
-
-      for (const link of fileLinks) {
-        const targetPath = link.target as string;
-        if (!nodes.has(targetPath)) {
-          nodes.set(targetPath, this.createNode(targetPath));
-        }
-        links.push(link);
-      }
+      nodes.set(filePath, this.createNode(filePath));
     }
+
+    const processFile = async (filePath: string) => {
+      try {
+        const content = await fsPromises.readFile(filePath, 'utf8');
+        // We pass 'true' to indicate we want to use the cached index
+        const fileLinks = this.extractDependencies(filePath, content);
+
+        for (const link of fileLinks) {
+          const targetPath = link.target as string;
+          
+          // Only add links if the target actually exists in our graph
+          if (this.fileSystemIndex.has(targetPath)) {
+            if (!nodes.has(targetPath)) {
+              nodes.set(targetPath, this.createNode(targetPath));
+            }
+            links.push(link);
+          }
+        }
+      } catch (error) {
+        Logger.warn(`Error generating graph: `, error as Error);
+      }
+    };
+
+    const queue = [...files];
+    const workers = Array(Math.min(files.length, MAX_CONCURRENT_READS))
+      .fill(null)
+      .map(async () => {
+        while (queue.length > 0) {
+          const filePath = queue.shift();
+          if (filePath) await processFile(filePath);
+        }
+      });
+
+    await Promise.all(workers);
 
     return {
       nodes: Array.from(nodes.values()),
@@ -150,38 +179,42 @@ export class GraphGenerator {
     };
   }
 
-  private discoverFiles(startPath: string, depth: number = 0): string[] {
-    const files: string[] = [];
-
+private async discoverFiles(startPath: string, depth: number = 0): Promise<string[]> {
     if (depth > this.maxDepth) {
-      return files;
+      return [];
     }
 
-    try {
-      const entries = fs.readdirSync(startPath, { withFileTypes: true });
+    const fileList: string[] = [];
 
-      for (const entry of entries) {
+    try {
+      const entries = await fsPromises.readdir(startPath, { withFileTypes: true });
+      
+      // Process entries in parallel
+      const tasks = entries.map(async (entry) => {
         const fullPath = path.join(startPath, entry.name);
 
-        // Check ignore patterns
         if (this.shouldIgnore(fullPath)) {
-          continue;
+          return;
         }
 
         if (entry.isDirectory()) {
-          files.push(...this.discoverFiles(fullPath, depth + 1));
+          const subFiles = await this.discoverFiles(fullPath, depth + 1);
+          fileList.push(...subFiles);
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name);
           if (this.supportedExtensions.includes(ext)) {
-            files.push(fullPath);
+            fileList.push(fullPath);
           }
         }
-      }
+      });
+
+      await Promise.all(tasks);
+
     } catch (error) {
       Logger.warn(`Error reading directory ${startPath}`, error as Error);
     }
 
-    return files;
+    return fileList;
   }
 
   private shouldIgnore(filePath: string): boolean {
@@ -507,17 +540,10 @@ export class GraphGenerator {
   }
 
   private resolveCppInclude(fromFile: string, includePath: string): string | null {
-    // MVP rule:
-    // - If it’s quoted include (or looks project-ish), try:
-    //   1) relative to current file’s directory
-    //   2) relative to workspace root
-    // - If it’s a system include (vector, stdio.h), we will likely fail and return null.
-    //
-    // We cannot reliably know include paths without compile_commands.json / build system,
-    // but this gets you useful edges for many repos.
-
     const fromDir = path.dirname(fromFile);
 
+    // List of potential full paths to check
+    // Note: We resolve them to absolute strings immediately
     const candidates: string[] = [
       path.resolve(fromDir, includePath),
       path.resolve(this.workspaceRoot, includePath),
@@ -527,26 +553,20 @@ export class GraphGenerator {
       path.resolve(this.workspaceRoot, 'src', includePath)
     ];
 
+    // FAST CHECK: Use the Set, not fs.existsSync
     for (const c of candidates) {
-      if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
+      if (this.fileSystemIndex.has(c)) return c;
     }
 
-    // If include is like "foo/bar", try adding typical header extensions
+    // Check extensions (.h, .hpp) if not provided
     const ext = path.extname(includePath);
     if (!ext) {
-      const withExtCandidates: string[] = [];
       const exts = ['.h', '.hpp', '.hh'];
-      for (const base of [
-        path.resolve(fromDir, includePath),
-        path.resolve(this.workspaceRoot, includePath),
-        path.resolve(this.workspaceRoot, 'include', includePath),
-        path.resolve(this.workspaceRoot, 'src', includePath)
-      ]) {
-        for (const e of exts) withExtCandidates.push(base + e);
-      }
-
-      for (const c of withExtCandidates) {
-        if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
+      for (const base of candidates) {
+        for (const e of exts) {
+          const withExt = base + e;
+          if (this.fileSystemIndex.has(withExt)) return withExt;
+        }
       }
     }
 
