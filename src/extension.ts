@@ -335,7 +335,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.commands.registerCommand('atlasic.openDebugChat',
         () => {
-          DebugChatPanel.createOrShow(context.extensionUri, apiClient!, debugCollector!);
+          DebugChatPanel.createOrShow(context.extensionUri, apiClient!, debugCollector!, cacheManager);
         }
       )
     );
