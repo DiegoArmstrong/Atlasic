@@ -21,3 +21,7 @@ This is where Atlasic comes in...
 Atlasic is ***an atlas for your logic***. 
 
 We take your codebase's logic and give you back an interactive atlas of the relationships that matter, so you can navigate the structure of the system faster. This way, you can spend more of your time building solutions instead of figuring out where to start.
+
+# Usage
+
+Atlasic is a published VsCode extension! Simply go to your extensions panel, look up Atlasic, and have fun seeing your codebase like never before.
