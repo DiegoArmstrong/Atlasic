@@ -39,10 +39,6 @@
         "title": "Atlasic: Open Debug Assistant"
       },
       {
-        "command": "atlasic.generateCommitMessage",
-        "title": "Atlasic: Generate Commit Message"
-      },
-      {
         "command": "atlasic.analyzeChanges",
         "title": "Atlasic: Analyze Git Changes"
       }

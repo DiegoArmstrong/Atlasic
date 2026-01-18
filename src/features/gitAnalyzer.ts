@@ -49,49 +49,6 @@ export class GitAnalyzer {
     }
   }
 
-  async generateCommitMessage(): Promise<void> {
-    try {
-      const diff = await this.getGitDiff();
-      
-      if (diff.files.length === 0) {
-        vscode.window.showInformationMessage('No uncommitted changes found');
-        return;
-      }
-
-      const commitMessage = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: 'Generating commit message...',
-          cancellable: false
-        },
-        async () => {
-          return await this.generateCommitMessageFromDiff(diff);
-        }
-      );
-
-      // Show commit message with options
-      const action = await vscode.window.showInformationMessage(
-        'Commit message generated!',
-        { modal: true, detail: commitMessage },
-        'Copy to Clipboard',
-        'Open Source Control'
-      );
-
-      if (action === 'Copy to Clipboard') {
-        await vscode.env.clipboard.writeText(commitMessage);
-        vscode.window.showInformationMessage('Commit message copied to clipboard!');
-      } else if (action === 'Open Source Control') {
-        // Copy and open source control view
-        await vscode.env.clipboard.writeText(commitMessage);
-        vscode.commands.executeCommand('workbench.view.scm');
-        vscode.window.showInformationMessage('Commit message copied! Paste it in Source Control.');
-      }
-    } catch (error) {
-      Logger.error('Error generating commit message', error as Error);
-      vscode.window.showErrorMessage(`Failed to generate commit message: ${(error as Error).message}`);
-    }
-  }
-
   private async getGitDiff(): Promise<GitDiff> {
     return new Promise((resolve, reject) => {
       // Get unstaged and staged changes
@@ -160,57 +117,6 @@ export class GitAnalyzer {
         });
       });
     });
-  }
-
-  private async generateCommitMessageFromDiff(diff: GitDiff): Promise<string> {
-    const prompt = this.buildCommitMessagePrompt(diff);
-    
-    const messages: ChatMessage[] = [
-      { role: 'system', content: 'You are an expert at writing clear, concise commit messages following conventional commit conventions.' },
-      { role: 'user', content: prompt }
-    ];
-
-    const response = await this.apiClient.chatCompletion(messages, {
-      temperature: 0.5,
-      maxTokens: 500
-    });
-
-    return response.trim();
-  }
-
-  private buildCommitMessagePrompt(diff: GitDiff): string {
-    let prompt = `Generate a commit message for the following changes. Follow conventional commit format (type: description).
-
-**Summary:**
-- Files changed: ${diff.summary.filesChanged}
-- Additions: +${diff.summary.additions}
-- Deletions: -${diff.summary.deletions}
-
-**Changed Files:**
-`;
-
-    diff.files.forEach(file => {
-      prompt += `- ${file.status}: ${file.path}\n`;
-    });
-
-    prompt += `\n**Diff Preview:**\n`;
-    
-    // Include first few files' diffs
-    const filesToInclude = diff.files.slice(0, 5);
-    filesToInclude.forEach(file => {
-      prompt += `\n### ${file.path}\n\`\`\`diff\n`;
-      const diffLines = file.diff.split('\n').slice(0, 50);
-      prompt += diffLines.join('\n');
-      prompt += `\n\`\`\`\n`;
-    });
-
-    if (diff.files.length > 5) {
-      prompt += `\n... and ${diff.files.length - 5} more files\n`;
-    }
-
-    prompt += `\nProvide a clear, concise commit message in conventional commit format. Include a body if the changes are complex. Do not include extra commentary, just the commit message.`;
-
-    return prompt;
   }
 
   private async analyzeWithAI(diff: GitDiff): Promise<string> {
