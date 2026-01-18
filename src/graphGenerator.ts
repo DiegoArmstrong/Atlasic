@@ -197,34 +197,99 @@ export class GraphGenerator {
       id: filePath,
       label: fileName,
       category: this.categorizeFile(filePath),
-      language: ext.slice(1) // Remove leading dot
+      language: this.getLanguageLabel(ext),
     };
   }
 
   private categorizeFile(filePath: string): string {
-    const fileName = path.basename(filePath).toLowerCase();
-    const dirName = path.dirname(filePath).toLowerCase();
+  const fileName = path.basename(filePath).toLowerCase();
+  const dirName = path.dirname(filePath).toLowerCase();
+  const ext = path.extname(fileName).toLowerCase();
 
-    if (fileName.includes('.test.') || fileName.includes('.spec.') || dirName.includes('test')) {
-      return 'test';
-    }
-    if (fileName.includes('config') || fileName.endsWith('.config.ts') || fileName.endsWith('.config.js')) {
-      return 'config';
-    }
-    if (dirName.includes('component') || fileName.includes('component')) {
-      return 'component';
-    }
-    if (dirName.includes('api') || dirName.includes('service')) {
-      return 'api';
-    }
-    if (dirName.includes('util') || dirName.includes('helper')) {
-      return 'utility';
-    }
-    if (dirName.includes('model') || dirName.includes('type')) {
-      return 'model';
+  // --- Tests ---
+  if (
+    dirName.includes(`${path.sep}test`) ||
+    dirName.includes(`${path.sep}tests`) ||
+    dirName.includes(`${path.sep}spec`) ||
+    fileName.includes('.test.') ||
+    fileName.includes('.spec.') ||
+    fileName.endsWith('_test' + ext) ||
+    fileName.endsWith('test' + ext)
+  ) {
+    return 'test';
+  }
+
+  // --- Documentation ---
+  if (
+    dirName.includes(`${path.sep}docs`) ||
+    dirName.includes(`${path.sep}doc`) ||
+    fileName === 'readme.md' ||
+    fileName === 'readme' ||
+    fileName.endsWith('.md') ||
+    fileName.endsWith('.rst')
+  ) {
+    return 'docs';
+  }
+
+  // --- Build / tooling ---
+  if (
+    dirName.includes(`${path.sep}build`) ||
+    dirName.includes(`${path.sep}cmake`) ||
+    dirName.includes(`${path.sep}scripts`) ||
+    dirName.includes(`${path.sep}tools`) ||
+    fileName === 'cmakelists.txt' ||
+    fileName.endsWith('.cmake') ||
+    fileName === 'makefile' ||
+    fileName === 'dockerfile' ||
+    fileName.endsWith('.mk')
+  ) {
+    return 'build';
+  }
+
+  // --- Includes / headers (very relevant for C/C++) ---
+  if (
+    dirName.includes(`${path.sep}include`) ||
+    ext === '.h' ||
+    ext === '.hpp' ||
+    ext === '.hh'
+  ) {
+    return 'include';
+  }
+
+  // --- Source code (general) ---
+  if (
+    dirName.includes(`${path.sep}src`) ||
+    dirName.includes(`${path.sep}source`) ||
+    dirName.includes(`${path.sep}lib`)
+  ) {
+    return 'src';
+  }
+
+  // --- Config (general) ---
+  if (
+    dirName.includes(`${path.sep}config`) ||
+    fileName.includes('config') ||
+    fileName.endsWith('.json') ||
+    fileName.endsWith('.yml') ||
+    fileName.endsWith('.yaml') ||
+    fileName.endsWith('.toml') ||
+    fileName.endsWith('.ini')
+  ) {
+    return 'config';
+  }
+
+  return 'other';
+}
+
+
+  private getLanguageLabel(extWithDot: string): string {
+    const ext = extWithDot.toLowerCase();
+
+    if (ext === '.c' || ext === '.cpp' || ext === '.h' || ext === '.hpp') {
+        return 'C/C++';
     }
 
-    return 'other';
+    return ext.startsWith('.') ? ext.slice(1) : ext;
   }
 
   private extractDependencies(filePath: string, content: string): GraphLink[] {
