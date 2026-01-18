@@ -94,7 +94,7 @@ async function maybeSendGitHeat(
     const head = await git.getHead(repoRoot);
     if (!head) return;
 
-    const windowDays = 30; // hackathon default
+    const windowDays = 365; 
     const metric: GitHeatCache['metric'] = 'touches';
 
     const cacheFile = `git-heat-${metric}-${windowDays}d-${head}.json`;
