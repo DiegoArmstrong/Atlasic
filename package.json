@@ -4,6 +4,16 @@
   "description": "AI-powered codebase visualization and dependency graph tool",
   "version": "1.0.0",
   "publisher": "atlasic",
+  "authors": [
+    {
+      "name": "Diego Armstrong",
+      "email": "diegoarmstrong84@gmail.com"
+    },
+    {
+      "name": "Tamzeed Quazi",
+      "email": "tamzeed.q@gmail.com"
+    }
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/DiegoArmstrong/Atlasic"
