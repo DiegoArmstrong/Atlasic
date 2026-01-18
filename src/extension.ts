@@ -38,7 +38,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
   if (aiEnabled) {
     const apiKey = process.env.OPENROUTER_API_KEY;
-    console.log(apiKey)
     
     if (!apiKey) {
       vscode.window.showWarningMessage(
@@ -65,9 +64,54 @@ export async function activate(context: vscode.ExtensionContext) {
   // Create status bar
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
   statusBar.text = '$(map) Atlasic';
-  statusBar.command = 'atlasic.openVisualizer';
+  statusBar.command = 'atlasic.showMenu';
+  statusBar.tooltip = 'Atlasic - Click for options';
   statusBar.show();
   context.subscriptions.push(statusBar);
+
+  // Register menu command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('atlasic.showMenu', async () => {
+      const options: vscode.QuickPickItem[] = [
+        {
+          label: '$(graph) View Graph',
+          description: 'Display dependency graph',
+          alwaysShow: true
+        },
+        {
+          label: '$(trash) Clear Cache',
+          description: 'Clear the graph cache',
+          alwaysShow: true
+        },
+        {
+          label: '$(bug) Debug AI',
+          description: 'Open Debug AI Assistant',
+          alwaysShow: apiClient && debugCollector ? true : false
+        },
+        {
+          label: '$(git-branch) Analyze Git',
+          description: 'Analyze git changes with AI',
+          alwaysShow: gitAnalyzer ? true : false
+        }
+      ];
+
+      const selected = await vscode.window.showQuickPick(options, {
+        placeHolder: 'Atlasic - Select an option'
+      });
+
+      if (!selected) return;
+
+      if (selected.label.includes('View Graph')) {
+        vscode.commands.executeCommand('atlasic.displayGraph');
+      } else if (selected.label.includes('Clear Cache')) {
+        vscode.commands.executeCommand('atlasic.clearCache');
+      } else if (selected.label.includes('Debug AI')) {
+        vscode.commands.executeCommand('atlasic.openDebugChat');
+      } else if (selected.label.includes('Analyze Git')) {
+        vscode.commands.executeCommand('atlasic.analyzeChanges');
+      }
+    })
+  );
 
   // Register commands
   context.subscriptions.push(
@@ -163,12 +207,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
   if (gitAnalyzer) {
     context.subscriptions.push(
-      vscode.commands.registerCommand('atlasic.generateCommitMessage',
-        async () => {
-          await gitAnalyzer!.generateCommitMessage();
-        }
-      ),
-
       vscode.commands.registerCommand('atlasic.analyzeChanges',
         async () => {
           await gitAnalyzer!.analyzeChanges();
@@ -176,6 +214,37 @@ export async function activate(context: vscode.ExtensionContext) {
       )
     );
   }
+
+  // Register displayGraph command for menu
+  context.subscriptions.push(
+    vscode.commands.registerCommand('atlasic.displayGraph', async () => {
+      try {
+        const cachedData = await cacheManager.loadGraph();
+        
+        if (cachedData) {
+          // Display cached graph
+          GraphPanel.createOrShow(context.extensionUri, cachedData);
+        } else {
+          // Generate new graph
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: 'Generating code graph...',
+              cancellable: false
+            },
+            async () => {
+              const graphData = await graphGenerator.generateGraph();
+              await cacheManager.saveGraph(graphData);
+              GraphPanel.createOrShow(context.extensionUri, graphData);
+            }
+          );
+        }
+      } catch (error) {
+        Logger.error('Error displaying graph', error as Error);
+        vscode.window.showErrorMessage(`Failed to display graph: ${(error as Error).message}`);
+      }
+    })
+  );
 }
 
 export function deactivate() {
