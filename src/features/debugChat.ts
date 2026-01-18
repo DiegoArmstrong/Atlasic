@@ -4,7 +4,6 @@ import { OpenRouterClient, ChatMessage } from '../services/openRouterClient';
 import { DebugContextCollector } from '../services/debugContextCollector';
 import { FileContextHandler, FileContext } from '../services/fileContextHandler';
 import { JiraClient, JiraTicket } from '../services/jiraClient';
-import { GraphChangeDetector, ChangedNode } from '../services/graphChangeDetector';
 import { CacheManager } from '../cacheManager';
 import { CodebaseGraph } from '../types';
 import { Logger } from '../utils/logger';
@@ -91,8 +90,8 @@ export class DebugChatPanel {
           case 'requestFileSelection':
             await this._handleFileSelection();
             break;
-          case 'linkJiraTicket':
-            await this._handleJiraLinking(message.ticketUrl);
+          case 'checkJiraStatus':
+            this._panel.webview.postMessage({ command: 'showJiraModal', mode: 'link' });
             break;
           case 'jiraMenuChoice':
             await this._handleJiraMenuChoice(message.choice, message.data);
@@ -389,44 +388,30 @@ export class DebugChatPanel {
 
   private async _handleJiraMenuChoice(choice: string, data?: any) {
     try {
-      Logger.info(`Handling Jira menu choice: ${choice}`);
-      if (choice === 'configure') {
-        // Configure Jira connection - use data from modal if provided
-        if (data) {
-          const { url, email, token } = data;
-          
-          this.jiraClient = new JiraClient({
-            workspaceUrl: url,
-            accessToken: token,
-            userEmail: email
-          });
+      Logger.info(`Handling Jira link: ${choice}`);
+      if (choice === 'link' && data) {
+        const { url, email, token, ticketUrl } = data;
+        
+        // Configure Jira connection
+        this.jiraClient = new JiraClient({
+          workspaceUrl: url,
+          accessToken: token,
+          userEmail: email
+        });
 
-          const isValid = await this.jiraClient.validateConnection();
-          if (!isValid) {
-            this._panel.webview.postMessage({
-              command: 'error',
-              message: 'Jira authentication failed'
-            });
-            this.jiraClient = undefined;
-            return;
-          }
-
-          this._panel.webview.postMessage({
-            command: 'jiraConfigured'
-          });
-        }
-      } else if (choice === 'link') {
-        // Link a Jira ticket
-        if (!this.jiraClient) {
+        const isValid = await this.jiraClient.validateConnection();
+        if (!isValid) {
           this._panel.webview.postMessage({
             command: 'error',
-            message: 'Jira not configured. Please configure first.'
+            message: 'Jira authentication failed'
           });
+          this.jiraClient = undefined;
           return;
         }
 
-        if (data && data.ticketUrl) {
-          await this._handleJiraLinking(data.ticketUrl);
+        // Link the ticket
+        if (ticketUrl) {
+          await this._handleJiraLinking(ticketUrl);
         }
       }
     } catch (error) {
@@ -472,23 +457,6 @@ Be concise but thorough. Focus on actionable insights.`;
       prompt += `**Description:** ${this.jiraTicket.description}\n`;
       if (this.jiraTicket.assignee) {
         prompt += `**Assignee:** ${this.jiraTicket.assignee}\n`;
-      }
-    }
-
-    // Add graph change detection if graph is available
-    if (graph && this.uploadedFiles.length > 0) {
-      const changedNodes = GraphChangeDetector.detectChangedNodes(
-        graph,
-        this.uploadedFiles.map(f => f.path)
-      );
-
-      if (changedNodes.length > 0) {
-        prompt += `\n\n## Likely Affected Graph Nodes:\n`;
-        changedNodes.slice(0, 20).forEach(changed => {
-          const levelLabel = changed.level === 0 ? '(directly)' : 
-                           changed.level === 1 ? '(dependents)' : '(dependencies)';
-          prompt += `- **${changed.node.label}** ${levelLabel}: ${changed.reason}\n`;
-        });
       }
     }
 
@@ -625,7 +593,7 @@ Be concise but thorough. Focus on actionable insights.`;
       background: var(--vscode-button-secondaryHoverBackground);
     }
 
-    #uploadFilesBtn, #jiraConfigureBtn, #jiraLinkBtn {
+    #uploadFilesBtn, #jiraLinkBtn {
       padding: 4px 12px;
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
@@ -635,7 +603,7 @@ Be concise but thorough. Focus on actionable insights.`;
       font-size: 12px;
     }
     
-    #uploadFilesBtn:hover, #jiraConfigureBtn:hover, #jiraLinkBtn:hover {
+    #uploadFilesBtn:hover, #jiraLinkBtn:hover {
       background: var(--vscode-button-secondaryHoverBackground);
     }
 
@@ -976,7 +944,6 @@ Be concise but thorough. Focus on actionable insights.`;
     <h2>🤖 Debug Assistant</h2>
     <div style="display: flex; gap: 8px;">
       <button id="uploadFilesBtn" title="Upload context files">📁 Upload</button>
-      <button id="jiraConfigureBtn" title="Configure Jira">⚙️ Jira Config</button>
       <button id="jiraLinkBtn" title="Link Jira ticket">🔗 Link Ticket</button>
       <button id="clearBtn">Clear Chat</button>
     </div>
@@ -1030,7 +997,6 @@ Be concise but thorough. Focus on actionable insights.`;
     const sendBtn = document.getElementById('sendBtn');
     const clearBtn = document.getElementById('clearBtn');
     const uploadFilesBtn = document.getElementById('uploadFilesBtn');
-    const jiraConfigureBtn = document.getElementById('jiraConfigureBtn');
     const jiraLinkBtn = document.getElementById('jiraLinkBtn');
     const contextDisplay = document.getElementById('contextDisplay');
     
@@ -1059,32 +1025,17 @@ Be concise but thorough. Focus on actionable insights.`;
 
     // Modal functions
     function showModal(mode) {
-      currentModalMode = mode;
-      if (mode === 'configure') {
-        modalTitle.textContent = 'Configure Jira';
-        ticketUrlGroup.style.display = 'none';
-        jiraUrlInput.placeholder = 'https://yourname.atlassian.net';
-        jiraEmailInput.placeholder = 'user@example.com';
-        jiraTokenInput.placeholder = 'Your API token';
-        jiraUrlInput.required = true;
-        jiraEmailInput.required = true;
-        jiraTokenInput.required = true;
-        jiraForm.reset();
-      } else if (mode === 'link') {
-        modalTitle.textContent = 'Link Jira Ticket';
-        ticketUrlGroup.style.display = 'flex';
-        jiraUrlInput.required = false;
-        jiraEmailInput.required = false;
-        jiraTokenInput.required = false;
-        ticketUrlInput.required = true;
-        jiraForm.reset();
-      }
+      currentModalMode = 'link'; // Always use link mode
+      modalTitle.textContent = 'Link Jira Ticket';
+      ticketUrlGroup.style.display = 'flex';
+      // All fields are required since we need config + ticket URL
+      jiraUrlInput.required = true;
+      jiraEmailInput.required = true;
+      jiraTokenInput.required = true;
+      ticketUrlInput.required = true;
+      jiraForm.reset();
       jiraModal.style.display = 'flex';
-      if (currentModalMode === 'link') {
-        ticketUrlInput.focus();
-      } else {
-        jiraUrlInput.focus();
-      }
+      jiraUrlInput.focus();
     }
 
     function closeModal() {
@@ -1099,36 +1050,24 @@ Be concise but thorough. Focus on actionable insights.`;
     
     jiraForm.addEventListener('submit', (e) => {
       e.preventDefault();
-      if (currentModalMode === 'configure') {
-        vscode.postMessage({
-          command: 'jiraMenuChoice',
-          choice: 'configure',
-          data: {
-            url: jiraUrlInput.value,
-            email: jiraEmailInput.value,
-            token: jiraTokenInput.value
-          }
-        });
-      } else if (currentModalMode === 'link') {
-        vscode.postMessage({
-          command: 'jiraMenuChoice',
-          choice: 'link',
-          data: {
-            ticketUrl: ticketUrlInput.value
-          }
-        });
-      }
+      // Always send both config and ticket URL together
+      vscode.postMessage({
+        command: 'jiraMenuChoice',
+        choice: 'link',
+        data: {
+          url: jiraUrlInput.value,
+          email: jiraEmailInput.value,
+          token: jiraTokenInput.value,
+          ticketUrl: ticketUrlInput.value
+        }
+      });
       closeModal();
-    });
-
-    // Jira handling - Configure button
-    jiraConfigureBtn.addEventListener('click', () => {
-      showModal('configure');
     });
 
     // Jira handling - Link Ticket button
     jiraLinkBtn.addEventListener('click', () => {
-      showModal('link');
+      // Check if already configured, send a special message to backend
+      vscode.postMessage({ command: 'checkJiraStatus' });
     });
     
     function addMessage(role, content) {
@@ -1246,6 +1185,9 @@ Be concise but thorough. Focus on actionable insights.`;
           break;
         case 'jiraConfigured':
           jiraConfigured = true;
+          break;
+        case 'showJiraModal':
+          showModal(message.mode);
           break;
       }
     });
