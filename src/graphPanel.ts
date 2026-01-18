@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { CodebaseGraph } from './types';
+import { precomputeGraphMetaNative } from './native';
 
 export class GraphPanel {
   public static currentPanel: GraphPanel | undefined;
@@ -76,6 +77,14 @@ export class GraphPanel {
   }
 
   private getHtmlContent(): string {
+    // Try native precompute; fall back to raw graph if not available
+    const meta = precomputeGraphMetaNative(this.graph);
+    const precomputedGraph = meta?.graph ?? this.graph;
+    const precomputedMaxInDegree = meta?.maxInDegree ?? 0;
+
+    // If we didn’t get native maxInDegree, we’ll compute it in the webview JS.
+    const hasNativeMeta = Boolean(meta);
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -247,7 +256,6 @@ export class GraphPanel {
     .legend-item { display: flex; align-items: center; margin: 4px 0; }
     .legend-color { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
 
-    /* Optional tiny status line for git heat */
     .status {
       margin-top: 8px;
       font-size: 10px;
@@ -303,8 +311,6 @@ export class GraphPanel {
       Git heat: <strong id="gitStatusValue">loading…</strong><br/>
       Max git score: <strong id="gitMax">0</strong>
       </div>
-
-
     </div>
 
     <div class="stat-line" id="heatLegend" style="display:none; margin-top:10px;">
@@ -330,7 +336,9 @@ export class GraphPanel {
 
   <script>
     const vscode = acquireVsCodeApi();
-    const graphData = ${JSON.stringify(this.graph)};
+    const graphData = ${JSON.stringify(precomputedGraph)};
+    const HAS_NATIVE_META = ${hasNativeMeta ? 'true' : 'false'};
+    let maxInDegree = ${hasNativeMeta ? String(precomputedMaxInDegree) : '0'};
 
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -339,21 +347,30 @@ export class GraphPanel {
     document.getElementById('nodeCount').textContent = graphData.nodes.length;
     document.getElementById('linkCount').textContent = graphData.links.length;
 
-    // ---- Heatmap: compute in-degree (dependencies) ----
-    const inDegree = new Map();
-    graphData.nodes.forEach(n => inDegree.set(n.id, 0));
+    // If native didn’t precompute inDegree/maxInDegree, do it here as a fallback.
+    if (!HAS_NATIVE_META) {
+      const inDegree = new Map();
+      graphData.nodes.forEach(n => inDegree.set(n.id, 0));
 
-    graphData.links.forEach(l => {
-      const targetId = (typeof l.target === 'string') ? l.target : l.target.id;
-      inDegree.set(targetId, (inDegree.get(targetId) || 0) + 1);
-    });
+      graphData.links.forEach(l => {
+        const targetId = (typeof l.target === 'string') ? l.target : l.target.id;
+        inDegree.set(targetId, (inDegree.get(targetId) || 0) + 1);
+      });
 
-    graphData.nodes.forEach(n => {
-      n.inDegree = inDegree.get(n.id) || 0;
-      n.gitScore = 0; // default until we receive gitHeat message
-    });
+      graphData.nodes.forEach(n => {
+        n.inDegree = inDegree.get(n.id) || 0;
+        n.gitScore = 0;
+      });
 
-    const maxInDegree = d3.max(graphData.nodes, d => d.inDegree) || 0;
+      maxInDegree = d3.max(graphData.nodes, d => d.inDegree) || 0;
+    } else {
+      // Native path: ensure gitScore exists
+      graphData.nodes.forEach(n => {
+        if (typeof n.gitScore !== 'number') n.gitScore = 0;
+        if (typeof n.inDegree !== 'number') n.inDegree = 0;
+      });
+    }
+
     document.getElementById('heatMax').textContent = String(maxInDegree);
 
     // ---- Git heat payload (arrives later) ----
@@ -391,19 +408,17 @@ export class GraphPanel {
       return heatColorFrom01(v / denom);
     }
 
-    // Combined:
     function normDep(v) {
       return (Math.max(0, v) / Math.max(1, maxInDegree));
     }
 
     function normGit(v) {
       if (!maxGit) return 0;
-      // log compression helps huge repos a lot
       return Math.log1p(Math.max(0, v)) / Math.log1p(maxGit);
     }
 
     function combinedT01(d) {
-      const a = 0.5; // weight: dependencies vs git
+      const a = 0.5;
       return a * normDep(d.inDegree || 0) + (1 - a) * normGit(d.gitScore || 0);
     }
 
@@ -412,14 +427,11 @@ export class GraphPanel {
       .domain(['src', 'include', 'test', 'docs', 'build', 'config', 'other'])
       .range(['#61dafb', '#9b59b6', '#4ecdc4', '#ffd700', '#ff6b6b', '#95a5a6', '#95a5a6']);
 
-
-    // Color mode toggle
-    let colorMode = 'types'; // 'types' | 'heat' | 'combined'
+    let colorMode = 'types';
 
     function nodeFill(d) {
       if (colorMode === 'types') return color(d.category);
       if (colorMode === 'heat') return heatColor(d.inDegree || 0);
-      // combined
       return heatColorFrom01(combinedT01(d));
     }
 
@@ -428,7 +440,6 @@ export class GraphPanel {
       .attr('width', width)
       .attr('height', height);
 
-    // ---- Arrow marker definition ----
     const defs = svg.append('defs');
 
     defs.append('marker')
@@ -496,7 +507,6 @@ export class GraphPanel {
 
     function applyNodeColors() {
       node.select('circle').attr('fill', d => nodeFill(d));
-      // update the legend label text
       const heatModeLabel = document.getElementById('heatModeLabel');
       if (colorMode === 'heat') heatModeLabel.textContent = 'Heat = in-degree (dependencies)';
       else if (colorMode === 'combined') heatModeLabel.textContent = 'Heat = 50% in-degree + 50% git touches';
@@ -508,12 +518,9 @@ export class GraphPanel {
 
     function applyColorMode(mode) {
       colorMode = mode;
-
-      // show/hide legends
       const isHeatish = (mode === 'heat' || mode === 'combined');
       typesLegend.style.display = (mode === 'types') ? 'block' : 'none';
       heatLegend.style.display = isHeatish ? 'block' : 'none';
-
       applyNodeColors();
     }
 
@@ -529,13 +536,10 @@ export class GraphPanel {
       if (e.target.checked) applyColorMode('combined');
     });
 
-    // initialize
     applyColorMode('types');
 
-    // Tooltips
     const tooltip = d3.select('#tooltip');
 
-    // Highlighting
     function clearHighlights() {
       node.classed('highlighted', false);
       link.classed('highlighted', false);
@@ -543,9 +547,7 @@ export class GraphPanel {
 
     function highlightNode(d) {
       clearHighlights();
-
       node.classed('highlighted', n => n.id === d.id);
-
       link.classed('highlighted', l =>
         l.source.id === d.id || l.target.id === d.id
       );
@@ -553,7 +555,6 @@ export class GraphPanel {
 
     function zoomToNode(d) {
       const scale = 2;
-
       svg.transition()
         .duration(750)
         .call(
@@ -599,7 +600,6 @@ export class GraphPanel {
       }
     });
 
-    // Search functionality
     const searchInput = document.getElementById('searchInput');
     const searchSuggestions = document.getElementById('searchSuggestions');
     let selectedSuggestionIndex = -1;
@@ -692,7 +692,6 @@ export class GraphPanel {
       }
     });
 
-    // ----- Tick update: shorten lines so arrows stop near node edge -----
     function shortenLine(sx, sy, tx, ty, targetPad) {
       const dx = tx - sx;
       const dy = ty - sy;

@@ -39,3 +39,7 @@ coverage/
 *.tmp
 *.temp
 .cache/
+
+# Rust build output
+native/target/
+
