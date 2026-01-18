@@ -2,6 +2,84 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+use napi::bindgen_prelude::*;
+use serde_json::{json, Value};
+
+#[napi]
+pub fn precompute_graph_meta(graph_json: String) -> Result<String> {
+  let v: Value = serde_json::from_str(&graph_json)
+    .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid graph JSON: {e}")))?;
+
+  let nodes = v.get("nodes").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+  let links = v.get("links").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+
+  // inDegree keyed by node id
+  use std::collections::HashMap;
+  let mut indeg: HashMap<String, u32> = HashMap::new();
+
+  // init all nodes with 0
+  for n in &nodes {
+    if let Some(id) = n.get("id").and_then(|x| x.as_str()) {
+      indeg.insert(id.to_string(), 0);
+    }
+  }
+
+  // count targets
+  for l in &links {
+    let target_id_opt = match l.get("target") {
+      Some(Value::String(s)) => Some(s.clone()),
+      Some(Value::Object(o)) => o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()),
+      _ => None,
+    };
+
+    if let Some(tid) = target_id_opt {
+      *indeg.entry(tid).or_insert(0) += 1;
+    }
+  }
+
+  // build new nodes array with inDegree + gitScore default
+  let mut max_in_degree: u32 = 0;
+  let mut out_nodes: Vec<Value> = Vec::with_capacity(nodes.len());
+  let mut search_index: Vec<Value> = Vec::with_capacity(nodes.len());
+
+  for n in nodes {
+    let id = n.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let label = n.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string();
+
+    let d = *indeg.get(&id).unwrap_or(&0);
+    if d > max_in_degree { max_in_degree = d; }
+
+    // clone node object and inject fields
+    let mut n2 = n.clone();
+    if let Value::Object(ref mut obj) = n2 {
+      obj.insert("inDegree".to_string(), json!(d));
+      obj.insert("gitScore".to_string(), json!(0));
+    }
+
+    out_nodes.push(n2);
+
+    // lightweight search index
+    search_index.push(json!({
+      "id": id,
+      "labelLower": label.to_lowercase(),
+      "pathLower": id.to_lowercase()
+    }));
+  }
+
+  let out = json!({
+    "graph": {
+      "nodes": out_nodes,
+      "links": links,
+      "timestamp": v.get("timestamp").cloned().unwrap_or(json!(0))
+    },
+    "maxInDegree": max_in_degree,
+    "searchIndex": search_index
+  });
+
+  serde_json::to_string(&out)
+    .map_err(|e| Error::new(Status::GenericFailure, format!("Serialize failed: {e}")))
+}
+
 
 fn should_ignore(root: &Path, full_path: &Path, ignore_patterns: &[String]) -> bool {
   // Mirror your TS logic:

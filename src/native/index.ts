@@ -1,17 +1,24 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 
-let native: { discover_files: (root: string, ignore: string[], maxDepth: number, exts: string[]) => string[] } | null = null;
+import type { CodebaseGraph } from '../types';
 
-export function loadNative() {
+type NativeModule = {
+  // existing
+  discover_files: (root: string, ignore: string[], maxDepth: number, exts: string[]) => string[];
+
+  // new: Rust precompute (JSON in/out)
+  precompute_graph_meta: (graphJson: string) => string;
+};
+
+let native: NativeModule | null = null;
+
+export function loadNative(): NativeModule | null {
   if (native) return native;
 
-  // During dev, you can point directly at the built .node
-  // but easiest is to copy it into dist/native/atlasic_native.node at build time.
   try {
     native = require('../../dist/native/atlasic_native.node');
     return native;
   } catch (_) {
-    // fallback: no native available
     native = null;
     return null;
   }
@@ -26,5 +33,19 @@ export function discoverFilesNative(
   const n = loadNative();
   if (!n) return null;
   return n.discover_files(root, ignore, maxDepth, exts);
+}
+
+export function precomputeGraphMetaNative(
+  graph: CodebaseGraph
+): {
+  graph: CodebaseGraph;
+  maxInDegree: number;
+  searchIndex: Array<{ id: string; labelLower: string; pathLower: string }>;
+} | null {
+  const n = loadNative();
+  if (!n) return null;
+
+  const outJson = n.precompute_graph_meta(JSON.stringify(graph));
+  return JSON.parse(outJson);
 }
 
