@@ -1,6 +1,4 @@
 import * as vscode from 'vscode';
-import * as dotenv from 'dotenv';
-import * as path from 'path';
 import { GraphGenerator } from './graphGenerator';
 import { GraphPanel } from './graphPanel';
 import { CacheManager } from './cacheManager';
@@ -10,12 +8,59 @@ import { DebugContextCollector } from './services/debugContextCollector';
 import { DebugChatPanel } from './features/debugChat';
 import { GitAnalyzer } from './features/gitAnalyzer';
 
-export async function activate(context: vscode.ExtensionContext) {
-  // Load environment variables from .env file
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (workspaceRoot) {
-    dotenv.config({ path: path.join(workspaceRoot, '.env') });
+// Global state for AI services
+let apiClient: OpenRouterClient | undefined;
+let debugCollector: DebugContextCollector | undefined;
+let gitAnalyzer: GitAnalyzer | undefined;
+let workspaceRoot: string;
+
+async function initializeAIServices(config: vscode.WorkspaceConfiguration, updateUI: (client: OpenRouterClient | undefined, collector: DebugContextCollector | undefined, analyzer: GitAnalyzer | undefined) => void) {
+  const aiEnabled = config.get<boolean>('enableAIFeatures', true);
+
+  if (!aiEnabled) {
+    apiClient = undefined;
+    debugCollector = undefined;
+    gitAnalyzer = undefined;
+    updateUI(undefined, undefined, undefined);
+    return;
   }
+
+  const apiKey = config.get<string>('apiKey', '');
+
+  if (!apiKey) {
+    apiClient = undefined;
+    debugCollector = undefined;
+    gitAnalyzer = undefined;
+    updateUI(undefined, undefined, undefined);
+    vscode.window.showWarningMessage(
+      'Atlasic: API Key not configured. AI features will be disabled.',
+      'Configure Settings'
+    ).then(action => {
+      if (action === 'Configure Settings') {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'atlasic.apiKey');
+      }
+    });
+    return;
+  }
+
+  try {
+    apiClient = new OpenRouterClient(apiKey);
+    debugCollector = new DebugContextCollector();
+    gitAnalyzer = new GitAnalyzer(workspaceRoot, apiClient);
+    Logger.info('AI features initialized successfully');
+    updateUI(apiClient, debugCollector, gitAnalyzer);
+  } catch (error) {
+    Logger.error('Failed to initialize AI features', error as Error);
+    apiClient = undefined;
+    debugCollector = undefined;
+    gitAnalyzer = undefined;
+    updateUI(undefined, undefined, undefined);
+    vscode.window.showErrorMessage('Atlasic: Failed to initialize AI features');
+  }
+}
+
+export async function activate(context: vscode.ExtensionContext) {
+  workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 
   Logger.info('Atlasic extension is now active!');
 
@@ -28,41 +73,21 @@ export async function activate(context: vscode.ExtensionContext) {
   const graphGenerator = new GraphGenerator(workspaceRoot);
   const cacheManager = new CacheManager(workspaceRoot);
 
+  // Store menu items in a container so we can update them
+  let statusBar: vscode.StatusBarItem;
+
+  // Function to update menu visibility based on AI services availability
+  const updateMenuVisibility = (client: OpenRouterClient | undefined, collector: DebugContextCollector | undefined, analyzer: GitAnalyzer | undefined) => {
+    // This will be called whenever AI services change
+    Logger.info(`Menu updated: AI services ${client ? 'enabled' : 'disabled'}`);
+  };
+
   // Initialize AI services
-  let apiClient: OpenRouterClient | undefined;
-  let debugCollector: DebugContextCollector | undefined;
-  let gitAnalyzer: GitAnalyzer | undefined;
-
   const config = vscode.workspace.getConfiguration('atlasic');
-  const aiEnabled = config.get<boolean>('enableAIFeatures', true);
-
-  if (aiEnabled) {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    
-    if (!apiKey) {
-      vscode.window.showWarningMessage(
-        'Atlasic: OPENROUTER_API_KEY not found in .env file. AI features will be disabled.',
-        'Open Settings'
-      ).then(action => {
-        if (action === 'Open Settings') {
-          vscode.commands.executeCommand('workbench.action.openSettings', 'atlasic');
-        }
-      });
-    } else {
-      try {
-        apiClient = new OpenRouterClient(apiKey);
-        debugCollector = new DebugContextCollector();
-        gitAnalyzer = new GitAnalyzer(workspaceRoot, apiClient);
-        Logger.info('AI features initialized successfully');
-      } catch (error) {
-        Logger.error('Failed to initialize AI features', error as Error);
-        vscode.window.showErrorMessage('Atlasic: Failed to initialize AI features');
-      }
-    }
-  }
+  await initializeAIServices(config, updateMenuVisibility);
 
   // Create status bar
-  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
   statusBar.text = '$(map) Atlasic';
   statusBar.command = 'atlasic.showMenu';
   statusBar.tooltip = 'Atlasic - Click for options';
@@ -109,6 +134,18 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('atlasic.openDebugChat');
       } else if (selected.label.includes('Analyze Git')) {
         vscode.commands.executeCommand('atlasic.analyzeChanges');
+      }
+    })
+  );
+
+  // Watch for configuration changes
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(async (event) => {
+      if (event.affectsConfiguration('atlasic.apiKey') || event.affectsConfiguration('atlasic.aiModel') || event.affectsConfiguration('atlasic.enableAIFeatures')) {
+        Logger.info('Atlasic configuration changed, reinitializing AI services...');
+        const updatedConfig = vscode.workspace.getConfiguration('atlasic');
+        await initializeAIServices(updatedConfig, updateMenuVisibility);
+        vscode.window.showInformationMessage('Atlasic: AI services updated');
       }
     })
   );

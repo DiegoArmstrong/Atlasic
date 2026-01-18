@@ -83,10 +83,23 @@
           ],
           "description": "File extensions to analyze"
         },
+        "atlasic.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenRouter API Key for AI features",
+          "markdownDescription": "Your OpenRouter API key for AI-powered features. Get one at https://openrouter.ai/"
+        },
         "atlasic.aiModel": {
           "type": "string",
+          "enum": [
+            "google/gemini-3-flash-preview",
+            "google/gemini-2-flash-preview",
+            "google/gemini-2-pro-exp-02-05",
+            "google/gemini-pro"
+          ],
           "default": "google/gemini-3-flash-preview",
-          "description": "AI model to use for debug chat and git analysis (OpenRouter format)"
+          "description": "Gemini model to use for AI features",
+          "markdownDescription": "Select which Google Gemini model to use for AI-powered features (debug chat, git analysis)"
         },
         "atlasic.enableAIFeatures": {
           "type": "boolean",
@@ -111,7 +124,5 @@
     "eslint": "^8.55.0",
     "typescript": "^5.3.3"
   },
-  "dependencies": {
-    "dotenv": "^17.2.3"
-  }
+  "dependencies": {}
 }
