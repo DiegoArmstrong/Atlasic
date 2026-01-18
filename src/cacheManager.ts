@@ -14,7 +14,7 @@ export class CacheManager {
   }
 
   // -----------------------
-  // Existing graph cache
+  // Graph cache
   // -----------------------
   async saveGraph(graph: CodebaseGraph): Promise<void> {
     try {
@@ -48,7 +48,7 @@ export class CacheManager {
   }
 
   // -----------------------
-  // NEW: generic JSON cache helpers (used by git heat)
+  // generic JSON cache helpers (used by git heat)
   // -----------------------
   async saveJson<T>(fileName: string, data: T): Promise<void> {
     try {

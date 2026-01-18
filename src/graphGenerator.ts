@@ -30,11 +30,6 @@ export class GraphGenerator {
     this.loadPathAliases();
   }
 
-  /**
-   * CRITICAL: Character-by-character JSON parser that respects string boundaries.
-   * This prevents the bug where regex patterns like \/\*[\s\S]*?\*\/ match glob patterns
-   * like "/**\/*.ts" inside JSON strings, corrupting the path alias configuration.
-   */
   private parseJsonWithComments(content: string): string {
     let result = '';
     let inString = false;
@@ -392,9 +387,6 @@ export class GraphGenerator {
     return links;
   }
 
-  // =========================
-  // NEW: Rust dependencies
-  // =========================
   private extractRustDependencies(filePath: string, content: string): GraphLink[] {
     const links: GraphLink[] = [];
 
@@ -408,7 +400,6 @@ export class GraphGenerator {
     //   use super::foo;
     //   use self::foo;
     //   use crate::foo::{a,b};
-    // We'll extract only the leading module segment after crate/super/self.
     const useRegex = /^\s*use\s+(crate|super|self)(?:::([^;]+))\s*;/gm;
 
     // 1) mod foo;  -> try foo.rs or foo/mod.rs next to current file
@@ -458,11 +449,6 @@ export class GraphGenerator {
   }
 
   private resolveRustUse(fromFile: string, kind: string, topSeg: string): string | null {
-    // Best-effort resolution:
-    // - crate::foo -> workspaceRoot/src/foo.rs or workspaceRoot/src/foo/mod.rs
-    // - self::foo  -> same directory as current file: foo.rs or foo/mod.rs
-    // - super::foo -> parent directory: foo.rs or foo/mod.rs
-
     if (kind === 'crate') {
       const base = path.join(this.workspaceRoot, 'src', topSeg);
       const candidate1 = base + '.rs';
@@ -483,9 +469,6 @@ export class GraphGenerator {
     return null;
   }
 
-  // =========================
-  // NEW: C/C++ dependencies
-  // =========================
   private extractCppDependencies(filePath: string, content: string): GraphLink[] {
     const links: GraphLink[] = [];
 
@@ -507,15 +490,6 @@ export class GraphGenerator {
   }
 
   private resolveCppInclude(fromFile: string, includePath: string): string | null {
-    // MVP rule:
-    // - If it’s quoted include (or looks project-ish), try:
-    //   1) relative to current file’s directory
-    //   2) relative to workspace root
-    // - If it’s a system include (vector, stdio.h), we will likely fail and return null.
-    //
-    // We cannot reliably know include paths without compile_commands.json / build system,
-    // but this gets you useful edges for many repos.
-
     const fromDir = path.dirname(fromFile);
 
     const candidates: string[] = [
