@@ -54,7 +54,7 @@ var require_constants = __commonJS({
       ".idea",
       ".cache"
     ];
-    exports2.SUPPORTED_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".py", ".java", ".go"];
+    exports2.SUPPORTED_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".py", ".java", ".go", ".c", ".h", ".cpp", ".hpp", ".rs"];
     exports2.DEFAULT_MAX_DEPTH = 10;
     exports2.PATH_ALIAS_LOCATIONS = [
       "tsconfig.json",
@@ -298,6 +298,15 @@ var require_graphGenerator = __commonJS({
             return this.extractJavaDependencies(filePath, content);
           case ".go":
             return this.extractGoDependencies(filePath, content);
+          case ".rs":
+            return this.extractRustDependencies(filePath, content);
+          case ".c":
+          case ".h":
+          case ".cc":
+          case ".hh":
+          case ".cpp":
+          case ".hpp":
+            return this.extractCppDependencies(filePath, content);
           default:
             return [];
         }
@@ -400,6 +409,120 @@ var require_graphGenerator = __commonJS({
           }
         }
         return links;
+      }
+      // =========================
+      // NEW: Rust dependencies
+      // =========================
+      extractRustDependencies(filePath, content) {
+        const links = [];
+        const modRegex = /^\s*(?:pub\s+)?mod\s+([a-zA-Z_]\w*)\s*;/gm;
+        const useRegex = /^\s*use\s+(crate|super|self)(?:::([^;]+))\s*;/gm;
+        for (const match of content.matchAll(modRegex)) {
+          const modName = match[1];
+          const resolved = this.resolveRustMod(filePath, modName);
+          if (resolved) {
+            links.push({ source: filePath, target: resolved, type: "dependency" });
+          }
+        }
+        for (const match of content.matchAll(useRegex)) {
+          const kind = match[1];
+          const rest = match[2] || "";
+          const topSeg = this.firstRustPathSegment(rest);
+          if (!topSeg)
+            continue;
+          const resolved = this.resolveRustUse(filePath, kind, topSeg);
+          if (resolved) {
+            links.push({ source: filePath, target: resolved, type: "dependency" });
+          }
+        }
+        return links;
+      }
+      firstRustPathSegment(rest) {
+        const cleaned = rest.trim();
+        if (!cleaned)
+          return null;
+        const seg = cleaned.split("::")[0].trim();
+        const seg2 = seg.replace(/[{}]/g, "").trim();
+        return seg2.length ? seg2 : null;
+      }
+      resolveRustMod(fromFile, modName) {
+        const dir = path.dirname(fromFile);
+        const candidate1 = path.join(dir, `${modName}.rs`);
+        const candidate2 = path.join(dir, modName, "mod.rs");
+        if (fs.existsSync(candidate1))
+          return candidate1;
+        if (fs.existsSync(candidate2))
+          return candidate2;
+        return null;
+      }
+      resolveRustUse(fromFile, kind, topSeg) {
+        if (kind === "crate") {
+          const base = path.join(this.workspaceRoot, "src", topSeg);
+          const candidate12 = base + ".rs";
+          const candidate22 = path.join(base, "mod.rs");
+          if (fs.existsSync(candidate12))
+            return candidate12;
+          if (fs.existsSync(candidate22))
+            return candidate22;
+          return null;
+        }
+        const fromDir = path.dirname(fromFile);
+        const baseDir = kind === "super" ? path.dirname(fromDir) : fromDir;
+        const candidate1 = path.join(baseDir, `${topSeg}.rs`);
+        const candidate2 = path.join(baseDir, topSeg, "mod.rs");
+        if (fs.existsSync(candidate1))
+          return candidate1;
+        if (fs.existsSync(candidate2))
+          return candidate2;
+        return null;
+      }
+      // =========================
+      // NEW: C/C++ dependencies
+      // =========================
+      extractCppDependencies(filePath, content) {
+        const links = [];
+        const includeRegex = /^\s*#\s*include\s*[<"]([^">]+)[">]/gm;
+        for (const match of content.matchAll(includeRegex)) {
+          const includePath = match[1].trim();
+          const resolved = this.resolveCppInclude(filePath, includePath);
+          if (resolved) {
+            links.push({ source: filePath, target: resolved, type: "dependency" });
+          }
+        }
+        return links;
+      }
+      resolveCppInclude(fromFile, includePath) {
+        const fromDir = path.dirname(fromFile);
+        const candidates = [
+          path.resolve(fromDir, includePath),
+          path.resolve(this.workspaceRoot, includePath),
+          // Common conventions:
+          path.resolve(this.workspaceRoot, "include", includePath),
+          path.resolve(this.workspaceRoot, "src", includePath)
+        ];
+        for (const c of candidates) {
+          if (fs.existsSync(c) && fs.statSync(c).isFile())
+            return c;
+        }
+        const ext = path.extname(includePath);
+        if (!ext) {
+          const withExtCandidates = [];
+          const exts = [".h", ".hpp", ".hh"];
+          for (const base of [
+            path.resolve(fromDir, includePath),
+            path.resolve(this.workspaceRoot, includePath),
+            path.resolve(this.workspaceRoot, "include", includePath),
+            path.resolve(this.workspaceRoot, "src", includePath)
+          ]) {
+            for (const e of exts)
+              withExtCandidates.push(base + e);
+          }
+          for (const c of withExtCandidates) {
+            if (fs.existsSync(c) && fs.statSync(c).isFile())
+              return c;
+          }
+        }
+        return null;
       }
       resolveImportPath(fromFile, importPath) {
         const fromDir = path.dirname(fromFile);
@@ -845,7 +968,24 @@ var require_graphPanel = __commonJS({
     <div class="control-title">\u{1F4CA} Graph Stats</div>
     <div class="stat-line">Nodes: <strong id="nodeCount">0</strong></div>
     <div class="stat-line">Links: <strong id="linkCount">0</strong></div>
+
+    <div class="stat-line">
+      <label style="display:flex; gap:8px; align-items:center; user-select:none;">
+        <input type="checkbox" id="heatToggle" />
+        Heatmap (In-degree)
+      </label>
+    </div>
+
+    <div class="stat-line" id="heatLegend" style="display:none; margin-top:8px;">
+      <div style="font-size:11px; color:#aaa; margin-bottom:4px;">Cold \u2192 Hot</div>
+      <div style="height:10px; border-radius:6px; border:1px solid #444;
+                  background: linear-gradient(to right, #2c7bb6, #ffffbf, #d7191c);"></div>
+      <div style="display:flex; justify-content:space-between; font-size:10px; color:#999; margin-top:4px;">
+        <span>0</span><span id="heatMax">0</span>
+      </div>
+    </div>
   </div>
+
   <div class="legend">
     <div class="legend-title">\u{1F4C1} File Categories</div>
     <div class="legend-item">
@@ -873,6 +1013,7 @@ var require_graphPanel = __commonJS({
       <span>Model</span>
     </div>
   </div>
+
   <script>
     const vscode = acquireVsCodeApi();
     const graphData = ${JSON.stringify(this.graph)};
@@ -883,7 +1024,38 @@ var require_graphPanel = __commonJS({
     // Update stats
     document.getElementById('nodeCount').textContent = graphData.nodes.length;
     document.getElementById('linkCount').textContent = graphData.links.length;
-    
+
+    // ---- Heatmap: compute in-degree (how many files import this file) ----
+    const inDegree = new Map();
+    graphData.nodes.forEach(n => inDegree.set(n.id, 0));
+
+    // IMPORTANT: links may be strings initially; D3 later mutates them to objects
+    graphData.links.forEach(l => {
+      const targetId = (typeof l.target === 'string') ? l.target : l.target.id;
+      inDegree.set(targetId, (inDegree.get(targetId) || 0) + 1);
+    });
+
+    // Attach inDegree onto node objects for easy access
+    graphData.nodes.forEach(n => {
+      n.inDegree = inDegree.get(n.id) || 0;
+    });
+
+    const maxInDegree = d3.max(graphData.nodes, d => d.inDegree) || 0;
+    document.getElementById('heatMax').textContent = String(maxInDegree);
+
+    // Heat scale (0 -> max)
+    const heatTMin = 0.15; // 0 maps here (blue-ish instead of black/purple)
+    const heatTMax = 1.0;
+
+    function heatColor(v) {
+      const denom = Math.max(1, maxInDegree);
+      const t = v / denom; // 0..1
+      const t2 = heatTMin + (heatTMax - heatTMin) * t; // 0.15..1
+      return d3.interpolateTurbo(t2);
+    }
+
+    let heatmapEnabled = false;
+
     const svg = d3.select('#graph')
       .append('svg')
       .attr('width', width)
@@ -904,6 +1076,10 @@ var require_graphPanel = __commonJS({
     const color = d3.scaleOrdinal()
       .domain(['component', 'utility', 'api', 'test', 'config', 'model', 'other'])
       .range(['#61dafb', '#ffd700', '#ff6b6b', '#4ecdc4', '#95a5a6', '#9b59b6', '#95a5a6']);
+
+    function nodeFill(d) {
+      return heatmapEnabled ? heatColor(d.inDegree) : color(d.category);
+    }
     
     // Create simulation with improved forces
     const simulation = d3.forceSimulation(graphData.nodes)
@@ -938,11 +1114,24 @@ var require_graphPanel = __commonJS({
     
     node.append('circle')
       .attr('r', 8)
-      .attr('fill', d => color(d.category));
+      .attr('fill', d => nodeFill(d));
     
     node.append('text')
       .attr('dy', 22)
       .text(d => d.label);
+
+    function applyNodeColors() {
+      node.select('circle').attr('fill', d => nodeFill(d));
+    }
+
+    const heatToggle = document.getElementById('heatToggle');
+    const heatLegend = document.getElementById('heatLegend');
+
+    heatToggle.addEventListener('change', (e) => {
+      heatmapEnabled = e.target.checked;
+      heatLegend.style.display = heatmapEnabled ? 'block' : 'none';
+      applyNodeColors();
+    });
     
     // Tooltips
     const tooltip = d3.select('#tooltip');
@@ -973,8 +1162,6 @@ var require_graphPanel = __commonJS({
     // Zoom to node function
     function zoomToNode(d) {
       const scale = 2;
-      const x = d.x * scale - width / 2;
-      const y = d.y * scale - height / 2;
       
       svg.transition()
         .duration(750)
@@ -1000,6 +1187,9 @@ var require_graphPanel = __commonJS({
           </div>
           <div class="tooltip-line">
             <span class="tooltip-label">Category:</span><span>\${d.category}</span>
+          </div>
+          <div class="tooltip-line">
+            <span class="tooltip-label">In-degree:</span><span>\${d.inDegree ?? 0}</span>
           </div>
           \${d.language ? '<div class="tooltip-line"><span class="tooltip-label">Language:</span><span>' + d.language + '</span></div>' : ''}
         \`);

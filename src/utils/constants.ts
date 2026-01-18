@@ -13,7 +13,7 @@ export const DEFAULT_IGNORE_PATTERNS = [
   '.cache'
 ];
 
-export const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.go'];
+export const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.go', '.c', '.h', '.cpp', '.hpp', '.rs'];
 
 export const DEFAULT_MAX_DEPTH = 10;
 
