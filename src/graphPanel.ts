@@ -323,12 +323,12 @@ export class GraphPanel {
 
   <div class="legend" id="typesLegend">
     <div class="legend-title">📁 File Categories</div>
-    <div class="legend-item"><div class="legend-color" style="background: #61dafb;"></div><span>Component</span></div>
-    <div class="legend-item"><div class="legend-color" style="background: #ffd700;"></div><span>Utility</span></div>
-    <div class="legend-item"><div class="legend-color" style="background: #ff6b6b;"></div><span>API/Service</span></div>
-    <div class="legend-item"><div class="legend-color" style="background: #4ecdc4;"></div><span>Test</span></div>
-    <div class="legend-item"><div class="legend-color" style="background: #95a5a6;"></div><span>Config</span></div>
-    <div class="legend-item"><div class="legend-color" style="background: #9b59b6;"></div><span>Model</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #61dafb;"></div><span>Source</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #ffd700;"></div><span>Config</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #ff6b6b;"></div><span>Test</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #4ecdc4;"></div><span>Docs</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #95a5a6;"></div><span>Build</span></div>
+    <div class="legend-item"><div class="legend-color" style="background: #9b59b6;"></div><span>Include</span></div>
   </div>
 
   <script>
@@ -412,8 +412,9 @@ export class GraphPanel {
 
     // Color scale by category
     const color = d3.scaleOrdinal()
-      .domain(['component', 'utility', 'api', 'test', 'config', 'model', 'other'])
-      .range(['#61dafb', '#ffd700', '#ff6b6b', '#4ecdc4', '#95a5a6', '#9b59b6', '#95a5a6']);
+      .domain(['src', 'include', 'test', 'docs', 'build', 'config', 'other'])
+      .range(['#61dafb', '#9b59b6', '#4ecdc4', '#ffd700', '#ff6b6b', '#95a5a6', '#95a5a6']);
+
 
     // Color mode toggle
     let colorMode = 'types'; // 'types' | 'heat' | 'combined'
