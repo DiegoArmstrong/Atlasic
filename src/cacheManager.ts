@@ -14,7 +14,7 @@ export class CacheManager {
   }
 
   // -----------------------
-  // Existing graph cache
+  // Graph cache
   // -----------------------
   async saveGraph(graph: CodebaseGraph): Promise<void> {
     try {
@@ -48,7 +48,7 @@ export class CacheManager {
   }
 
   // -----------------------
-  // NEW: generic JSON cache helpers (used by git heat)
+  // generic JSON cache helpers (used by git heat)
   // -----------------------
   async saveJson<T>(fileName: string, data: T): Promise<void> {
     try {
@@ -69,6 +69,34 @@ export class CacheManager {
     } catch (error) {
       Logger.warn(`Failed to load JSON cache: ${fileName}`, error as Error);
       return null;
+    }
+  }
+
+  // -----------------------
+  // Chat session cache
+  // -----------------------
+  async saveChatSession(sessionId: string, data: {
+    uploadedFiles: string[];
+    jiraTicket?: any;
+  }): Promise<void> {
+    await this.saveJson(`chat-session-${sessionId}.json`, data);
+  }
+
+  async loadChatSession(sessionId: string): Promise<{
+    uploadedFiles: string[];
+    jiraTicket?: any;
+  } | null> {
+    return this.loadJson(`chat-session-${sessionId}.json`);
+  }
+
+  async clearChatSession(sessionId: string): Promise<void> {
+    try {
+      const cachePath = path.join(this.cacheDir, `chat-session-${sessionId}.json`);
+      if (fs.existsSync(cachePath)) {
+        fs.unlinkSync(cachePath);
+      }
+    } catch (error) {
+      Logger.warn(`Failed to clear chat session ${sessionId}`, error as Error);
     }
   }
 }

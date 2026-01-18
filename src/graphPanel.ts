@@ -1,4 +1,3 @@
-// src/GraphPanel.ts
 import * as vscode from 'vscode';
 import { CodebaseGraph } from './types';
 
@@ -52,10 +51,6 @@ export class GraphPanel {
         case 'openFile':
           this.openFile(message.path);
           break;
-        // (optional) if you later want webview to request git heat:
-        // case 'requestGitHeat':
-        //   ...
-        //   break;
       }
     });
   }

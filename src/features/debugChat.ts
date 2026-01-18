@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { OpenRouterClient, ChatMessage } from '../services/openRouterClient';
 import { DebugContextCollector } from '../services/debugContextCollector';
+import { FileContextHandler, FileContext } from '../services/fileContextHandler';
+import { JiraClient, JiraTicket } from '../services/jiraClient';
+import { CacheManager } from '../cacheManager';
+import { CodebaseGraph } from '../types';
 import { Logger } from '../utils/logger';
 
 export class DebugChatPanel {
@@ -8,23 +13,36 @@ export class DebugChatPanel {
   private readonly _panel: vscode.WebviewPanel;
   private _disposables: vscode.Disposable[] = [];
   private chatHistory: ChatMessage[] = [];
+  private uploadedFiles: FileContext[] = [];
+  private jiraTicket: JiraTicket | undefined;
+  private jiraClient: JiraClient | undefined;
+  private sessionId: string;
 
   private constructor(
     panel: vscode.WebviewPanel,
     private extensionUri: vscode.Uri,
     private apiClient: OpenRouterClient,
-    private debugCollector: DebugContextCollector
+    private debugCollector: DebugContextCollector,
+    private cacheManager: CacheManager
   ) {
     this._panel = panel;
+    this._disposables = [];
+    this.chatHistory = [];
+    this.uploadedFiles = [];
+    this.jiraTicket = undefined;
+    this.sessionId = Date.now().toString();
+
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
     this._panel.webview.html = this._getWebviewContent();
     this._setWebviewMessageListener();
+    this._loadChatSession();
   }
 
   public static createOrShow(
     extensionUri: vscode.Uri,
     apiClient: OpenRouterClient,
-    debugCollector: DebugContextCollector
+    debugCollector: DebugContextCollector,
+    cacheManager: CacheManager
   ) {
     const column = vscode.window.activeTextEditor
       ? vscode.window.activeTextEditor.viewColumn
@@ -50,7 +68,8 @@ export class DebugChatPanel {
       panel,
       extensionUri,
       apiClient,
-      debugCollector
+      debugCollector,
+      cacheManager
     );
   }
 
@@ -63,7 +82,19 @@ export class DebugChatPanel {
             break;
           case 'clearChat':
             this.chatHistory = [];
+            this.uploadedFiles = [];
+            this.jiraTicket = undefined;
+            await this.cacheManager.clearChatSession(this.sessionId);
             this._panel.webview.postMessage({ command: 'clearChat' });
+            break;
+          case 'requestFileSelection':
+            await this._handleFileSelection();
+            break;
+          case 'checkJiraStatus':
+            this._panel.webview.postMessage({ command: 'showJiraModal', mode: 'link' });
+            break;
+          case 'jiraMenuChoice':
+            await this._handleJiraMenuChoice(message.choice, message.data);
             break;
         }
       },
@@ -87,9 +118,20 @@ export class DebugChatPanel {
 
       // Collect debug context
       const debugContext = await this.debugCollector.collectContext();
-      
+
+      // Load graph if available for change detection
+      let graph: CodebaseGraph | undefined;
+      try {
+        const loadedGraph = await this.cacheManager.loadGraph();
+        if (loadedGraph) {
+          graph = loadedGraph;
+        }
+      } catch {
+        // Graph not available, continue without it
+      }
+
       // Build system prompt with context
-      const systemPrompt = this._buildSystemPrompt(debugContext);
+      const systemPrompt = this._buildSystemPrompt(debugContext, graph);
       
       // Prepare messages for API
       const messages: ChatMessage[] = [
@@ -166,7 +208,223 @@ export class DebugChatPanel {
     return html;
   }
 
-  private _buildSystemPrompt(debugContext: any): string {
+  private async _loadChatSession() {
+    try {
+      const sessionData = await this.cacheManager.loadChatSession(this.sessionId);
+      if (sessionData) {
+        // Reload file contexts
+        for (const filePath of sessionData.uploadedFiles) {
+          const fileContext = await FileContextHandler.readFileContent(filePath);
+          if (fileContext) {
+            this.uploadedFiles.push(fileContext);
+            // Notify webview of restored file
+            this._panel.webview.postMessage({
+              command: 'fileUploaded',
+              file: {
+                filename: fileContext.filename,
+                size: fileContext.size,
+                language: fileContext.language
+              }
+            });
+          }
+        }
+        // Note: Jira ticket data isn't persisted since it can become stale
+      }
+    } catch (error) {
+      Logger.error('Failed to load chat session', error as Error);
+    }
+  }
+
+  private async _handleFileSelection() {
+    try {
+      // Use VS Code's native file picker
+      const uris = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: true,
+        filters: {
+          'Code Files': ['ts', 'js', 'py', 'json', 'md'],
+          'All Files': ['*']
+        },
+        title: 'Select files to upload for context'
+      });
+
+      if (!uris || uris.length === 0) {
+        return; // User cancelled
+      }
+
+      // Process selected files
+      const filePaths = uris.map(uri => uri.fsPath);
+      await this._handleFileUpload(filePaths);
+    } catch (error) {
+      Logger.error('File selection error', error as Error);
+      this._panel.webview.postMessage({
+        command: 'error',
+        message: `File selection failed: ${(error as Error).message}`
+      });
+    }
+  }
+
+  private async _saveChatSession() {
+    try {
+      await this.cacheManager.saveChatSession(this.sessionId, {
+        uploadedFiles: this.uploadedFiles.map(f => f.path),
+        jiraTicket: this.jiraTicket
+      });
+    } catch (error) {
+      Logger.error('Failed to save chat session', error as Error);
+    }
+  }
+
+  private async _handleFileUpload(filePaths: string[]) {
+    try {
+      if (this.uploadedFiles.length >= 10) {
+        this._panel.webview.postMessage({
+          command: 'error',
+          message: 'Maximum 10 files allowed'
+        });
+        return;
+      }
+
+      const failedFiles: string[] = [];
+      const successfulFiles: string[] = [];
+
+      for (const filePath of filePaths) {
+        if (this.uploadedFiles.length >= 10) {
+          failedFiles.push(path.basename(filePath));
+          continue;
+        }
+
+        // Check if already uploaded
+        if (this.uploadedFiles.some(f => f.path === filePath)) {
+          this._panel.webview.postMessage({
+            command: 'error',
+            message: `${path.basename(filePath)} already uploaded`
+          });
+          continue;
+        }
+        
+        const fileContext = await FileContextHandler.readFileContent(filePath);
+        if (fileContext) {
+          this.uploadedFiles.push(fileContext);
+          successfulFiles.push(fileContext.filename);
+          this._panel.webview.postMessage({
+            command: 'fileUploaded',
+            file: {
+              filename: fileContext.filename,
+              size: fileContext.size,
+              language: fileContext.language
+            }
+          });
+        } else {
+          failedFiles.push(path.basename(filePath));
+        }
+      }
+
+      // Provide summary
+      if (failedFiles.length > 0) {
+        this._panel.webview.postMessage({
+          command: 'error',
+          message: `Failed to upload: ${failedFiles.join(', ')} (Check file type/size)`
+        });
+      }
+
+      if (successfulFiles.length > 0) {
+        await this._saveChatSession();
+      }
+    } catch (error) {
+      Logger.error('File upload error', error as Error);
+      this._panel.webview.postMessage({
+        command: 'error',
+        message: `Upload failed: ${(error as Error).message}`
+      });
+    }
+  }
+
+  private async _handleJiraLinking(ticketUrl: string) {
+    try {
+      // Extract ticket key from URL (e.g., "https://workspace.atlassian.net/browse/PROJ-123")
+      const match = ticketUrl.match(/browse\/([A-Z]+-\d+)/);
+      if (!match) {
+        this._panel.webview.postMessage({
+          command: 'error',
+          message: 'Invalid Jira ticket URL'
+        });
+        return;
+      }
+
+      const ticketKey = match[1];
+
+      if (!this.jiraClient) {
+        this._panel.webview.postMessage({
+          command: 'error',
+          message: 'Jira not configured. Please configure first.'
+        });
+        return;
+      }
+
+      const ticket = await this.jiraClient.getTicket(ticketKey);
+      this.jiraTicket = ticket;
+
+      this._panel.webview.postMessage({
+        command: 'jiraLinked',
+        ticket: {
+          key: ticket.key,
+          summary: ticket.summary,
+          status: ticket.status,
+          issueType: ticket.issueType
+        }
+      });
+
+      await this._saveChatSession();
+    } catch (error) {
+      Logger.error('Jira linking error', error as Error);
+      this._panel.webview.postMessage({
+        command: 'error',
+        message: `Jira error: ${(error as Error).message}`
+      });
+    }
+  }
+
+  private async _handleJiraMenuChoice(choice: string, data?: any) {
+    try {
+      Logger.info(`Handling Jira link: ${choice}`);
+      if (choice === 'link' && data) {
+        const { url, email, token, ticketUrl } = data;
+        
+        // Configure Jira connection
+        this.jiraClient = new JiraClient({
+          workspaceUrl: url,
+          accessToken: token,
+          userEmail: email
+        });
+
+        const isValid = await this.jiraClient.validateConnection();
+        if (!isValid) {
+          this._panel.webview.postMessage({
+            command: 'error',
+            message: 'Jira authentication failed'
+          });
+          this.jiraClient = undefined;
+          return;
+        }
+
+        // Link the ticket
+        if (ticketUrl) {
+          await this._handleJiraLinking(ticketUrl);
+        }
+      }
+    } catch (error) {
+      Logger.error('Jira menu choice error', error as Error);
+      console.error('Jira menu error:', error);
+      this._panel.webview.postMessage({
+        command: 'error',
+        message: `Error: ${(error as Error).message}`
+      });
+    }
+  }
+
+  private _buildSystemPrompt(debugContext: any, graph?: CodebaseGraph): string {
     let prompt = `You are an expert debugging assistant integrated into VS Code. You help developers understand and fix issues in their code by analyzing debug context, stack traces, variables, and code structure.
 
 Your capabilities:
@@ -177,6 +435,30 @@ Your capabilities:
 - Provide code examples when helpful
 
 Be concise but thorough. Focus on actionable insights.`;
+
+    // Add uploaded files context
+    if (this.uploadedFiles.length > 0) {
+      prompt += `\n\n## Uploaded Files for Analysis:\n`;
+      this.uploadedFiles.forEach(file => {
+        prompt += `\n### ${file.filename} (${file.language})\n`;
+        prompt += '```\n';
+        prompt += file.content;
+        prompt += '\n```\n';
+      });
+    }
+
+    // Add Jira ticket context
+    if (this.jiraTicket) {
+      prompt += `\n\n## Related Jira Ticket:\n`;
+      prompt += `**Key:** ${this.jiraTicket.key}\n`;
+      prompt += `**Type:** ${this.jiraTicket.issueType}\n`;
+      prompt += `**Status:** ${this.jiraTicket.status}\n`;
+      prompt += `**Summary:** ${this.jiraTicket.summary}\n`;
+      prompt += `**Description:** ${this.jiraTicket.description}\n`;
+      if (this.jiraTicket.assignee) {
+        prompt += `**Assignee:** ${this.jiraTicket.assignee}\n`;
+      }
+    }
 
     if (!debugContext) {
       prompt += `\n\nNote: No active debug session detected. I can still help with general debugging questions and code analysis.`;
@@ -309,6 +591,50 @@ Be concise but thorough. Focus on actionable insights.`;
     
     #clearBtn:hover {
       background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    #uploadFilesBtn, #jiraLinkBtn {
+      padding: 4px 12px;
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    
+    #uploadFilesBtn:hover, #jiraLinkBtn:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    #fileInput {
+      display: none;
+    }
+
+    .file-badge, .jira-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      border-radius: 3px;
+      font-size: 11px;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+
+    .file-badge::before {
+      content: '📄 ';
+    }
+
+    .jira-badge::before {
+      content: '🎫 ';
+    }
+
+    #contextDisplay {
+      padding: 8px 16px;
+      background: var(--vscode-editor-background);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      font-size: 12px;
+      min-height: 20px;
     }
     
     #chatContainer {
@@ -490,13 +816,140 @@ Be concise but thorough. Focus on actionable insights.`;
       opacity: 0.5;
       cursor: not-allowed;
     }
+    
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    
+    .modal-content {
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+      width: 90%;
+    }
+    
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    
+    .modal-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--vscode-foreground);
+    }
+    
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: var(--vscode-foreground);
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .modal-close:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+    
+    #jiraForm {
+      padding: 16px;
+    }
+    
+    .form-group {
+      margin-bottom: 16px;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .form-group label {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--vscode-foreground);
+    }
+    
+    .form-group input {
+      padding: 8px 12px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 4px;
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+    }
+    
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--vscode-focusBorder);
+    }
+    
+    .modal-buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      padding-top: 8px;
+    }
+    
+    .btn-primary, .btn-secondary {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    
+    .btn-primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    
+    .btn-primary:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+    
+    .btn-secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
   </style>
 </head>
 <body>
   <div id="header">
     <h2>🤖 Debug Assistant</h2>
-    <button id="clearBtn">Clear Chat</button>
+    <div style="display: flex; gap: 8px;">
+      <button id="uploadFilesBtn" title="Upload context files">📁 Upload</button>
+      <button id="jiraLinkBtn" title="Link Jira ticket">🔗 Link Ticket</button>
+      <button id="clearBtn">Clear Chat</button>
+    </div>
   </div>
+
+  <div id="contextDisplay"></div>
   
   <div id="chatContainer"></div>
   
@@ -505,14 +958,117 @@ Be concise but thorough. Focus on actionable insights.`;
     <button id="sendBtn">Send</button>
   </div>
 
+  <!-- Jira Configuration Modal -->
+  <div id="jiraModal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modalTitle">Configure Jira</h3>
+        <button class="modal-close" id="modalCloseBtn">&times;</button>
+      </div>
+      <form id="jiraForm">
+        <div class="form-group">
+          <label for="jiraUrlInput">Workspace URL:</label>
+          <input type="text" id="jiraUrlInput" placeholder="https://yourname.atlassian.net" required>
+        </div>
+        <div class="form-group">
+          <label for="jiraEmailInput">Email:</label>
+          <input type="email" id="jiraEmailInput" placeholder="user@example.com" required>
+        </div>
+        <div class="form-group">
+          <label for="jiraTokenInput">API Token:</label>
+          <input type="password" id="jiraTokenInput" placeholder="Your API token" required>
+        </div>
+        <div class="form-group" id="ticketUrlGroup" style="display: none;">
+          <label for="ticketUrlInput">Ticket URL:</label>
+          <input type="text" id="ticketUrlInput" placeholder="https://workspace.atlassian.net/browse/PROJ-123">
+        </div>
+        <div class="modal-buttons">
+          <button type="button" id="modalCancelBtn" class="btn-secondary">Cancel</button>
+          <button type="submit" id="modalSubmitBtn" class="btn-primary">Submit</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script>
     const vscode = acquireVsCodeApi();
     const chatContainer = document.getElementById('chatContainer');
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
     const clearBtn = document.getElementById('clearBtn');
+    const uploadFilesBtn = document.getElementById('uploadFilesBtn');
+    const jiraLinkBtn = document.getElementById('jiraLinkBtn');
+    const contextDisplay = document.getElementById('contextDisplay');
+    
+    // Modal elements
+    const jiraModal = document.getElementById('jiraModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const jiraForm = document.getElementById('jiraForm');
+    const modalCloseBtn = document.getElementById('modalCloseBtn');
+    const modalCancelBtn = document.getElementById('modalCancelBtn');
+    const modalSubmitBtn = document.getElementById('modalSubmitBtn');
+    const jiraUrlInput = document.getElementById('jiraUrlInput');
+    const jiraEmailInput = document.getElementById('jiraEmailInput');
+    const jiraTokenInput = document.getElementById('jiraTokenInput');
+    const ticketUrlInput = document.getElementById('ticketUrlInput');
+    const ticketUrlGroup = document.getElementById('ticketUrlGroup');
+    
+    let currentModalMode = null; // 'configure' or 'link'
     
     let isProcessing = false;
+    let jiraConfigured = false;
+
+    // File upload handling via VS Code file picker
+    uploadFilesBtn.addEventListener('click', () => {
+      vscode.postMessage({ command: 'requestFileSelection' });
+    });
+
+    // Modal functions
+    function showModal(mode) {
+      currentModalMode = 'link'; // Always use link mode
+      modalTitle.textContent = 'Link Jira Ticket';
+      ticketUrlGroup.style.display = 'flex';
+      // All fields are required since we need config + ticket URL
+      jiraUrlInput.required = true;
+      jiraEmailInput.required = true;
+      jiraTokenInput.required = true;
+      ticketUrlInput.required = true;
+      jiraForm.reset();
+      jiraModal.style.display = 'flex';
+      jiraUrlInput.focus();
+    }
+
+    function closeModal() {
+      jiraModal.style.display = 'none';
+      currentModalMode = null;
+      jiraForm.reset();
+    }
+
+    // Modal event listeners
+    modalCloseBtn.addEventListener('click', closeModal);
+    modalCancelBtn.addEventListener('click', closeModal);
+    
+    jiraForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      // Always send both config and ticket URL together
+      vscode.postMessage({
+        command: 'jiraMenuChoice',
+        choice: 'link',
+        data: {
+          url: jiraUrlInput.value,
+          email: jiraEmailInput.value,
+          token: jiraTokenInput.value,
+          ticketUrl: ticketUrlInput.value
+        }
+      });
+      closeModal();
+    });
+
+    // Jira handling - Link Ticket button
+    jiraLinkBtn.addEventListener('click', () => {
+      // Check if already configured, send a special message to backend
+      vscode.postMessage({ command: 'checkJiraStatus' });
+    });
     
     function addMessage(role, content) {
       const messageDiv = document.createElement('div');
@@ -613,6 +1169,25 @@ Be concise but thorough. Focus on actionable insights.`;
           break;
         case 'clearChat':
           chatContainer.innerHTML = '';
+          contextDisplay.innerHTML = '';
+          break;
+        case 'fileUploaded':
+          const fileBadge = document.createElement('span');
+          fileBadge.className = 'file-badge';
+          fileBadge.textContent = message.file.filename;
+          contextDisplay.appendChild(fileBadge);
+          break;
+        case 'jiraLinked':
+          const jiraBadge = document.createElement('span');
+          jiraBadge.className = 'jira-badge';
+          jiraBadge.textContent = message.ticket.key + ': ' + message.ticket.summary;
+          contextDisplay.appendChild(jiraBadge);
+          break;
+        case 'jiraConfigured':
+          jiraConfigured = true;
+          break;
+        case 'showJiraModal':
+          showModal(message.mode);
           break;
       }
     });

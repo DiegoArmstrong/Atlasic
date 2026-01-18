@@ -1,4 +1,3 @@
-// src/extension.ts
 import * as vscode from 'vscode';
 import { GraphGenerator } from './graphGenerator';
 import { GraphPanel } from './graphPanel';
@@ -8,8 +7,6 @@ import { OpenRouterClient } from './services/openRouterClient';
 import { DebugContextCollector } from './services/debugContextCollector';
 import { DebugChatPanel } from './features/debugChat';
 import { GitAnalyzer } from './features/gitAnalyzer';
-
-// NEW: git-heat (your streaming git heat service from steps 1-4)
 import { GitHeatService } from './gitHeat';
 
 // Global state for AI services
@@ -78,10 +75,6 @@ async function initializeAIServices(
   }
 }
 
-/**
- * NEW: fire-and-forget git heat computation + caching + webview postMessage
- * Safe to call after GraphPanel.createOrShow(...).
- */
 async function maybeSendGitHeat(
   cacheManager: CacheManager,
   workspaceRoot: string
@@ -300,7 +293,6 @@ export async function activate(context: vscode.ExtensionContext) {
               await cacheManager.saveGraph(graph);
               GraphPanel.refresh(graph);
 
-              // NEW: re-send git heat (panel exists already). Uses cache if possible.
               void maybeSendGitHeat(cacheManager, workspaceRoot);
 
               vscode.window.showInformationMessage('✅ Graph refreshed!');
@@ -318,9 +310,6 @@ export async function activate(context: vscode.ExtensionContext) {
         try {
           await cacheManager.clearCache();
 
-          // Optional: you may also want to delete git heat caches; depends on your CacheManager implementation.
-          // If you add a "clearAll" method, call it here.
-
           vscode.window.showInformationMessage('✅ Cache cleared!');
         } catch (error) {
           Logger.error('Error clearing cache', error as Error);
@@ -335,7 +324,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.commands.registerCommand('atlasic.openDebugChat',
         () => {
-          DebugChatPanel.createOrShow(context.extensionUri, apiClient!, debugCollector!);
+          DebugChatPanel.createOrShow(context.extensionUri, apiClient!, debugCollector!, cacheManager);
         }
       )
     );
@@ -359,7 +348,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (cachedData) {
           GraphPanel.createOrShow(context.extensionUri, cachedData);
-          // NEW: try to send git heat immediately (cached if possible)
           void maybeSendGitHeat(cacheManager, workspaceRoot);
         } else {
           await vscode.window.withProgress(
@@ -373,7 +361,6 @@ export async function activate(context: vscode.ExtensionContext) {
               await cacheManager.saveGraph(graphData);
               GraphPanel.createOrShow(context.extensionUri, graphData);
 
-              // NEW: compute + send git heat after panel is open
               void maybeSendGitHeat(cacheManager, workspaceRoot);
             }
           );
